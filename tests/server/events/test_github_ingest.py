@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from omnigent.errors import OmnigentError
-from omnigent.server.events import CanonicalEvent, PublishResult
+from omnigent.server.events import CanonicalEvent, PublishResult, event_matches
 from omnigent.server.routes.events import (
     GITHUB_WEBHOOK_SECRET_ENV_VAR,
     create_events_router,
@@ -184,6 +184,38 @@ def test_pull_request_normalizes_kind_and_fields() -> None:
         "sender": "hubot",
         "url": "https://github.com/acme/api/pull/77",
     }
+
+
+def _closed_pull_request(**pr_overrides: Any) -> dict[str, Any]:
+    return {
+        "action": "closed",
+        "repository": {"full_name": "acme/api"},
+        "pull_request": {"number": 9, **pr_overrides},
+    }
+
+
+@pytest.mark.parametrize("merged", [True, False])
+def test_pull_request_closed_preserves_boolean_merged(merged: bool) -> None:
+    normalized = normalize_github_event("pull_request", _closed_pull_request(merged=merged))
+    assert normalized is not None
+    kind, fields = normalized
+    assert kind == "pull_request.closed"
+    assert fields["merged"] is merged
+
+
+@pytest.mark.parametrize("pr_overrides", [{}, {"merged": None}, {"merged": "true"}, {"merged": 1}])
+def test_pull_request_omits_absent_or_malformed_merged(pr_overrides: dict[str, Any]) -> None:
+    normalized = normalize_github_event("pull_request", _closed_pull_request(**pr_overrides))
+    assert normalized is not None
+    assert "merged" not in normalized[1]
+
+
+def test_merged_only_subscription_matches_merged_and_rejects_unmerged() -> None:
+    merged = normalize_github_event("pull_request", _closed_pull_request(merged=True))
+    unmerged = normalize_github_event("pull_request", _closed_pull_request(merged=False))
+    assert merged is not None and unmerged is not None
+    assert event_matches({"merged": True}, merged[1]) is True
+    assert event_matches({"merged": True}, unmerged[1]) is False
 
 
 def test_issue_comment_on_pull_request_exposes_both_numbers() -> None:
