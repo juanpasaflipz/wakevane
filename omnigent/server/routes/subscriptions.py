@@ -222,6 +222,7 @@ def create_subscriptions_router(
             agent_store=agent_store,
             permission_store=permission_store,
             conversation_store=conversation_store,
+            egm_new_work=True,
         )
         model_override, _ = validate_session_model_metadata(
             model_override=body.model_override, reasoning_effort=None
@@ -269,6 +270,11 @@ def create_subscriptions_router(
                     host_store=host_store,
                     host_registry=getattr(request.app.state, "host_registry", None),
                 )
+        if agent.managed_by == "egm-template":
+            from omnigent.server.egm import require_egm_target
+
+            require_egm_target(body.host_id, workspace, execution_target)
+            return agent.id, workspace, model_override
         bound = await asyncio.to_thread(
             agent_for_user, agent_store, artifact_store, agent, owner_id
         )

@@ -1482,3 +1482,34 @@ describe("useAvailableAgents user agents (scope=user)", () => {
     expect(fetchMock.mock.calls.some(([url]) => url === USER_AGENTS_URL)).toBe(true);
   });
 });
+
+it("labels only the marked EGM template and omits run snapshots from discovery", async () => {
+  routeFetch({
+    [BUILTINS_URL]: mockResponse({
+      data: [
+        { id: "template", name: "egm-review", builtin: true, workflow_kind: "egm-template" },
+        { id: "import", name: "egm", builtin: false },
+      ],
+      has_more: false,
+    }),
+    [MINE_URL]: mockResponse({
+      data: [
+        {
+          id: "run",
+          agent_id: "snapshot",
+          agent_name: "egm-review",
+          created_at: 1,
+          updated_at: 1,
+          permission_level: 4,
+          labels: { "omnigent.egm.snapshot": "true" },
+        },
+      ],
+      has_more: false,
+    }),
+  });
+  const { result } = renderHook(() => useAvailableAgents(), { wrapper });
+  await waitFor(() => expect(result.current.isSuccess).toBe(true));
+  expect(result.current.data?.find((a) => a.id === "template")?.display_name).toBe("Design review");
+  expect(result.current.data?.some((a) => a.id === "snapshot")).toBe(false);
+  expect(result.current.data?.some((a) => a.id === "import")).toBe(true);
+});

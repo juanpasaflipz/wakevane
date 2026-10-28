@@ -901,6 +901,8 @@ def _ensure_builtin_agent(
         new_loc = f"{existing.id}/{bundle_hash}"
         # Sha-segment compare: legacy rows keep an ``ag_``-prefixed left
         # segment (physical artifact key); only the sha encodes content.
+        if existing.managed_by == "egm-template":
+            agent_store.update(existing.id, existing.bundle_location)
         if existing.bundle_location.rsplit("/", 1)[-1] == bundle_hash:
             # Blob can vanish while the row survives (pruned artifacts, DB
             # restored without the store); re-put so boot self-heals. Keyed on
@@ -1748,6 +1750,14 @@ def create_app(
         # warmup blocks deleted here.
 
         _ensure_default_agents(agent_store, artifact_store, agent_cache)
+        from omnigent.server.egm import ensure_egm
+
+        ensure_egm(
+            agent_store,
+            artifact_store,
+            agent_cache,
+            enabled=resolved_feature_flags.enabled(Feature.EGM_TEMPLATE),
+        )
 
         # Populate the policy registry (builtins + user-configured
         # modules) so GET /v1/policy-registry serves the catalog.

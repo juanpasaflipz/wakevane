@@ -11,6 +11,8 @@ run. It deliberately omits implementation details such as selectors, test IDs,
 CSS classes, and source paths. Discover those at run time from the code and
 the referenced tests; they change faster than the user journey.
 
+- [Design review](egm.md): opt-in EGM launch, continuation and compatibility.
+
 ## Skills
 
 Read the relevant skill file directly when its capability is needed:

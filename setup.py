@@ -82,7 +82,7 @@ class _GenerateBuildInfo(build_py):
 
         root = Path(__file__).resolve().parent
         dest_root = Path(self.build_lib) / "omnigent" / "resources" / "examples"
-        for name in ("debby", "factory", "polly"):
+        for name in ("debby", "egm", "factory", "polly"):
             src = root / "examples" / name
             if not src.is_dir():
                 continue

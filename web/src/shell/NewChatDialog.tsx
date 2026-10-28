@@ -3157,7 +3157,7 @@ export function NewChatLandingScreen() {
             ? cachedPickerOptions!.agent.id
             : (agentList[0]?.id ?? null);
   const effectiveAgentId = automaticHarnessFallback?.candidate?.value.id ?? defaultEffectiveAgentId;
-  const selectedAgent = useMemo(
+  const selectedAgent = useMemo<AvailableAgent | undefined>(
     () =>
       effectiveAgentId === PENDING_AGENT_ID && pendingAgent
         ? ({
@@ -5103,6 +5103,7 @@ export function NewChatLandingScreen() {
     pickerSelectionError === null &&
     sandboxCatalogError === null &&
     selectedAgent != null &&
+    !(selectedAgent.workflow_kind === "egm-template" && sandboxSelected) &&
     (sandboxSelected ? sandboxRepoValid : selectedHost?.status === "online" && workspaceValid) &&
     !creating;
 
@@ -5110,31 +5111,34 @@ export function NewChatLandingScreen() {
   // order a user fills the form — location first, then message — so the
   // tooltip always names the next missing input. Null when nothing is
   // actionable (submitting, or mid-create).
-  const submitDisabledReason = canSubmit
-    ? null
-    : mcpAuthorizing || mcpSelectionError
-      ? (mcpSelectionError ?? "Finish signing in to the MCP service…")
-      : pendingSkillCompletion
-        ? "Loading skills…"
-        : pickerLoading || workspaceStartLoading || worktreeRequestPending
-          ? "Loading session configuration…"
-          : pickerSelectionError || sandboxCatalogError
-            ? (pickerSelectionError ?? sandboxCatalogError)
-            : sandboxSelected && sandboxRepoOverCap
-              ? `This sandbox provider clones at most ${maxSandboxRepos} ${
-                  maxSandboxRepos === 1 ? "repository" : "repositories"
-                } — remove the extras`
-              : sandboxSelected && !sandboxRepoValid
-                ? "Please enter a valid repository URL"
-                : !sandboxSelected && selectedHostId && selectedHost?.status !== "online"
-                  ? "Selected host is unavailable. Reconnect it or choose another host."
-                  : !sandboxSelected && (!selectedHostId || !workspaceValid)
-                    ? "Please choose a host and working directory"
-                    : configuredAgentUnavailable && selectedAgent == null
-                      ? "This project's configured agent is unavailable — pick an agent to continue"
-                      : message.trim().length === 0 && files.length === 0
-                        ? "Enter a message to get started"
-                        : null;
+  const submitDisabledReason =
+    selectedAgent?.workflow_kind === "egm-template" && sandboxSelected
+      ? "Design review requires a connected host, not a managed sandbox"
+      : canSubmit
+        ? null
+        : mcpAuthorizing || mcpSelectionError
+          ? (mcpSelectionError ?? "Finish signing in to the MCP service…")
+          : pendingSkillCompletion
+            ? "Loading skills…"
+            : pickerLoading || workspaceStartLoading || worktreeRequestPending
+              ? "Loading session configuration…"
+              : pickerSelectionError || sandboxCatalogError
+                ? (pickerSelectionError ?? sandboxCatalogError)
+                : sandboxSelected && sandboxRepoOverCap
+                  ? `This sandbox provider clones at most ${maxSandboxRepos} ${
+                      maxSandboxRepos === 1 ? "repository" : "repositories"
+                    } — remove the extras`
+                  : sandboxSelected && !sandboxRepoValid
+                    ? "Please enter a valid repository URL"
+                    : !sandboxSelected && selectedHostId && selectedHost?.status !== "online"
+                      ? "Selected host is unavailable. Reconnect it or choose another host."
+                      : !sandboxSelected && (!selectedHostId || !workspaceValid)
+                        ? "Please choose a host and working directory"
+                        : configuredAgentUnavailable && selectedAgent == null
+                          ? "This project's configured agent is unavailable — pick an agent to continue"
+                          : message.trim().length === 0 && files.length === 0
+                            ? "Enter a message to get started"
+                            : null;
 
   // Names the picked provider, else the server's default label.
   const selectedSandboxLabel =
@@ -6733,6 +6737,12 @@ export function NewChatLandingScreen() {
             }}
             className="relative z-10"
           >
+            {selectedAgent?.workflow_kind === "egm-template" && (
+              <p role="note" className="px-4 py-2 text-sm text-muted-foreground">
+                Choose a connected, authenticated host and a repository containing docs/designs/egm.
+                Review output is saved there; reviewers have read-only access.
+              </p>
+            )}
             <ChatComposer
               keyboard={{ submitWithModEnter, preventsKeyboardSubmit }}
               className={cn(isDragActive && "ring-2 ring-ring ring-inset")}

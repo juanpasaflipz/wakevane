@@ -1226,3 +1226,40 @@ async def test_runner_never_expands_an_installed_agents_variables(
 
     assert contents.status_code == 200, contents.text
     assert contents.headers["X-Agent-Session-Scoped"] == "true"
+
+
+@pytest.mark.asyncio
+async def test_design_review_catalog_preserves_imports_and_hides_snapshots(
+    client, agent_store, artifact_store
+):
+    from unittest.mock import Mock
+
+    from omnigent.server.egm import ensure_egm, snapshot_agent
+
+    imported = await _install(client, ALICE, "egm")
+    assert imported.status_code == 200
+    ensure_egm(agent_store, artifact_store, Mock(), enabled=True)
+    rows = (await client.get("/v1/agents", headers=ALICE)).json()["data"]
+    template = next(row for row in rows if row["name"] == "egm-review")
+    assert template["builtin"] and template["workflow_kind"] == "egm-template"
+    assert "egm" in await _my_names(client, ALICE)
+    snapshot = snapshot_agent(
+        agent_store, artifact_store, agent_store.get(template["id"]), "alice@example.com"
+    )
+    assert snapshot.id not in [row["id"] for row in (await _mine(client, ALICE))["data"]]
+    response = await client.patch(
+        f"/v1/agents/{snapshot.id}", headers=ALICE, json={"description": "edit"}
+    )
+    assert response.status_code == 409
+    response = await client.patch(
+        f"/v1/agents/{imported.json()['id']}", headers=ALICE, json={"managed_by": "egm-template"}
+    )
+    assert response.status_code == 422
+    ensure_egm(agent_store, artifact_store, Mock(), enabled=False)
+    rows = (await client.get("/v1/agents", headers=ALICE)).json()["data"]
+    assert all(row["id"] != template["id"] for row in rows)
+    agent_store.update(template["id"], agent_store.get(template["id"]).bundle_location)
+    rows = (await client.get("/v1/agents", headers=ALICE)).json()["data"]
+    custom = next(row for row in rows if row["id"] == template["id"])
+    assert custom["builtin"] is False and custom["workflow_kind"] is None
+    assert "egm" in await _my_names(client, ALICE)

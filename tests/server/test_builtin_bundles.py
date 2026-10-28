@@ -284,3 +284,34 @@ def test_native_seed_loop_covers_every_native_agent() -> None:
 
     missing = [a.key for a in NATIVE_CODING_AGENTS if native_provider_for_key(a.key) is None]
     assert missing == [], f"native agents without a provider row to seed from: {missing}"
+
+
+def test_egm_optional_seed_and_snapshot_survive_restart(tmp_path, monkeypatch):
+    from unittest.mock import Mock
+
+    from omnigent.db.utils import builtin_agent_id
+    from omnigent.server.egm import ensure_egm, snapshot_agent
+    from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
+    from omnigent.stores.artifact_store.local import LocalArtifactStore
+
+    store = SqlAlchemyAgentStore(f"sqlite:///{tmp_path}/egm.db")
+    artifacts = LocalArtifactStore(str(tmp_path / "artifacts"))
+    cache = Mock()
+    ensure_egm(store, artifacts, cache, enabled=False)
+    assert store.get(builtin_agent_id("egm-review")) is None
+    ensure_egm(store, artifacts, cache, enabled=True)
+    row = store.get(builtin_agent_id("egm-review"))
+    assert row is not None and store.egm_available(row)
+    snapshot = snapshot_agent(store, artifacts, row, "owner")
+    original = artifacts.get(snapshot.bundle_location)
+    ensure_egm(store, artifacts, cache, enabled=True)
+    assert store.egm_available(store.get(row.id))
+    ensure_egm(store, artifacts, cache, enabled=False)
+    assert store.list().data == []
+    assert artifacts.get(snapshot.bundle_location) == original
+    # Broken optional content must not hide ordinary custom agents or kill startup.
+    store.create("ab" * 16, "ordinary", "ordinary-bundle")
+    monkeypatch.setattr(app, "_POLLY_BUNDLE_SOURCE", tmp_path / "missing" / "polly")
+    ensure_egm(store, artifacts, cache, enabled=True)
+    assert [a.name for a in store.list().data] == ["ordinary"]
+    assert artifacts.get(snapshot.bundle_location) == original

@@ -72,6 +72,7 @@ export const AGENT_DISPLAY_ORDER = [
   "Kimi",
   "Polly",
   "Debby",
+  "Design review",
 ];
 
 function displayRank(name: string): number {

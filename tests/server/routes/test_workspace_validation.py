@@ -66,7 +66,9 @@ def _hello_frame() -> HostHelloFrame:
 
 
 @pytest.fixture()
-async def host_setup() -> AsyncIterator[tuple[HostRegistry, _FakeWebSocket, asyncio.Task[None]]]:
+async def host_setup(
+    request: pytest.FixtureRequest,
+) -> AsyncIterator[tuple[HostRegistry, _FakeWebSocket, asyncio.Task[None]]]:
     """
     Build a registered host plus a background task that auto-replies
     to ``host.stat`` frames.
@@ -82,7 +84,7 @@ async def host_setup() -> AsyncIterator[tuple[HostRegistry, _FakeWebSocket, asyn
     registry = HostRegistry()
     ws = _FakeWebSocket()
     conn = registry.register(
-        host_id=_HOST_ID,
+        host_id=getattr(request, "param", _HOST_ID),
         ws=ws,  # type: ignore[arg-type] — duck-typed
         hello=_hello_frame(),
         owner=None,
@@ -606,3 +608,20 @@ async def test_tilde_boundary_passed_through_to_host(
         spec_cwd="~/universe",
     )
     assert canonical == "/Users/corey/universe/src/foo"
+
+
+async def test_design_review_checks_existing_output_and_repository(host_setup):
+    from omnigent.errors import OmnigentError
+    from omnigent.server.egm import validate_egm_output
+
+    registry, _, _ = host_setup
+    with pytest.raises(OmnigentError, match="Create docs/designs/egm"):
+        await validate_egm_output(registry, _HOST_ID, "/repo")
+    _set_stat(registry, "/repo/docs/designs/egm")
+    with pytest.raises(OmnigentError, match="Git repository"):
+        await validate_egm_output(registry, _HOST_ID, "/repo")
+    _set_stat(registry, "/repo/.git", type_="file")
+    await validate_egm_output(registry, _HOST_ID, "/repo")
+    _set_stat(registry, "/repo/docs/designs/egm", canonical="/elsewhere")
+    with pytest.raises(OmnigentError, match="inside the repository"):
+        await validate_egm_output(registry, _HOST_ID, "/repo")

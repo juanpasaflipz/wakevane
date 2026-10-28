@@ -35,6 +35,7 @@ class Feature(StrEnum):
     SUBSCRIPTIONS = "subscriptions"
     SHIMS_PAGE = "shims_page"
     SUBSCRIPTIONS_PAGE = "subscriptions_page"
+    EGM_TEMPLATE = "egm_template"
 
 
 @dataclass(frozen=True)
@@ -148,6 +149,12 @@ FEATURE_DEFINITIONS: tuple[FeatureDefinition, ...] = (
         review_by_release="0.24.0",
         # On by default in the flywheel distribution; upstream keeps it opt-in.
         default_enabled=True,
+    ),
+    FeatureDefinition(
+        feature=Feature.EGM_TEMPLATE,
+        description="Packaged Design review workflow in New Chat",
+        owner="server",
+        review_by_release="0.24.0",
     ),
     FeatureDefinition(
         feature=Feature.SUBSCRIPTIONS_PAGE,

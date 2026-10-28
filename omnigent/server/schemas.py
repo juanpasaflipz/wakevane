@@ -373,6 +373,7 @@ class AgentObject(BaseModel):
         agents.
     """
 
+    workflow_kind: Literal["egm-template"] | None = None
     id: str
     object: str = "agent"
     name: str

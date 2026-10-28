@@ -10483,6 +10483,8 @@ def _reject_server_reserved_label_seed(labels: dict[str, str] | None) -> None:
         return
     from omnigent.mcp_selection import MCP_SELECTION_PREFIX
 
+    if any(key.startswith("omnigent.egm.") for key in labels):
+        raise OmnigentError("Design review metadata is server-owned", code=ErrorCode.INVALID_INPUT)
     if any(key.startswith(MCP_SELECTION_PREFIX) for key in labels):
         raise OmnigentError(
             "MCP selection must be changed through the session MCP endpoint",

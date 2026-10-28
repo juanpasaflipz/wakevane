@@ -57,6 +57,20 @@ def test_node_22_13_passes() -> None:
     assert _run_node_version_check(module, "v22.13.0\n") == "22.13.0"
 
 
+def test_build_copies_egm_bundle(tmp_path: Path) -> None:
+    from omnigent.spec import load
+
+    module = _load_setup_module()
+    command = module._GenerateBuildInfo()
+    command.build_lib = str(tmp_path)
+    command._bundle_examples()
+    bundle = tmp_path / "omnigent" / "resources" / "examples" / "egm"
+    assert not bundle.is_symlink()
+    spec = load(bundle, enforce_handler_allowlist=True)
+    assert spec.name == "egm"
+    assert [agent.name for agent in spec.sub_agents] == ["goldfish"]
+
+
 @pytest.mark.parametrize("version", ["v23.0.0\n", "v24.14.0\n", "v25.2.1\n"])
 def test_newer_node_versions_pass(version: str) -> None:
     module = _load_setup_module()

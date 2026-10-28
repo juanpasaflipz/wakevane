@@ -918,3 +918,119 @@ def test_agent_updates_are_workspace_scoped(agent_store: SqlAlchemyAgentStore) -
     assert updated is not None and updated.version == 3
     with workspace_scope(42):
         assert agent_store.get(agent.id) == other
+
+
+def test_egm_ownership_snapshot_and_takeover(agent_store, artifact_store):
+    """Unmarked deterministic identities stay custom; snapshots survive template takeover."""
+    import hashlib
+
+    from omnigent.db.utils import builtin_agent_id
+    from omnigent.errors import OmnigentError
+    from omnigent.server.egm import snapshot_agent
+
+    identity = builtin_agent_id("egm-review")
+    bundle = b"test bundle bytes"
+    location = f"{identity}/{hashlib.sha256(bundle).hexdigest()}"
+    row = agent_store.seed_egm(location, None)
+    assert row and row.managed_by == "egm-template"
+    artifact_store.put(location, bundle)
+    agent_store.egm_bundle_location = location
+    snapshot = snapshot_agent(agent_store, artifact_store, row, "owner")
+    assert snapshot.managed_by == "egm-session"
+    assert snapshot.id != row.id
+    assert artifact_store.get(snapshot.bundle_location) == bundle
+    assert agent_store.list_user_agents("owner").data == []
+    assert agent_store.seed_egm(location, row) is not None
+    for operation in (
+        lambda: agent_store.update(snapshot.id, "replacement"),
+        lambda: agent_store.update_configuration(snapshot, "replacement", description=None),
+    ):
+        with pytest.raises(OmnigentError, match="immutable"):
+            operation()
+    # Identical bytes still constitute operator takeover.
+    custom = agent_store.update(row.id, row.bundle_location)
+    assert custom.managed_by is None
+    assert agent_store.seed_egm(location, custom) is None
+    agent_store.egm_bundle_location = None
+    assert [a.id for a in agent_store.list().data] == [row.id]
+    assert agent_store.get(snapshot.id).managed_by == "egm-session"
+    assert artifact_store.get(snapshot.bundle_location) == bundle
+
+
+def test_egm_does_not_adopt_deterministic_custom_row(agent_store):
+    from omnigent.db.utils import builtin_agent_id
+
+    custom = agent_store.create(builtin_agent_id("egm-review"), "egm-review", "custom")
+    assert agent_store.seed_egm("packaged", custom) is None
+    assert agent_store.get(custom.id).bundle_location == "custom"
+    assert agent_store.get(custom.id).managed_by is None
+
+
+def test_egm_seed_import_race(agent_store):
+    """Exactly one name claimant wins; the loser cannot overwrite it."""
+    from omnigent.errors import OmnigentError
+
+    gate = Barrier(2)
+
+    def seed():
+        gate.wait()
+        return agent_store.seed_egm("packaged", None)
+
+    def install():
+        gate.wait()
+        try:
+            return agent_store.create_user_agent(uuid.uuid4().hex, "egm-review", "custom", "owner")
+        except OmnigentError:
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(seed), pool.submit(install)]
+        winners = [f.result() for f in futures]
+    assert sum(row is not None for row in winners) == 1
+    winner = next(row for row in winners if row)
+    assert agent_store.get(winner.id).bundle_location == winner.bundle_location
+
+
+def test_egm_hidden_before_pagination_and_revision_cas(agent_store):
+    from omnigent.db.utils import builtin_agent_id
+
+    row = agent_store.seed_egm("old", None)
+    assert row
+    assert agent_store.list(limit=1).data == []
+    agent_store.egm_bundle_location = "old"
+    assert len(agent_store.list(limit=1).data) == 1
+    refreshed = agent_store.seed_egm("new", row)
+    assert refreshed.version == row.version + 1
+    assert agent_store.seed_egm("stale", row) is None
+    assert agent_store.get(builtin_agent_id("egm-review")).bundle_location == "new"
+    assert agent_store.list(limit=1).data == []
+
+
+def test_egm_offline_cleanup_retains_referenced_snapshot(
+    agent_store, artifact_store, conversation_store
+):
+    import hashlib
+
+    from omnigent.server.egm import cleanup_abandoned_snapshots, snapshot_agent
+
+    payload = b"immutable"
+    location = f"template/{hashlib.sha256(payload).hexdigest()}"
+    template = agent_store.seed_egm(location, None)
+    artifact_store.put(location, payload)
+    agent_store.egm_bundle_location = location
+    live = snapshot_agent(agent_store, artifact_store, template, "owner")
+    orphan = snapshot_agent(agent_store, artifact_store, template, "owner")
+    root = conversation_store.create_conversation(agent_id=live.id)
+    conversation_store.create_conversation(
+        agent_id=live.id,
+        parent_conversation_id=root.id,
+        kind="sub_agent",
+        sub_agent_name="goldfish",
+    )
+    assert (
+        cleanup_abandoned_snapshots(agent_store, artifact_store, before=live.created_at + 1) == 1
+    )
+    assert agent_store.get(orphan.id) is None
+    assert not artifact_store.exists(orphan.bundle_location)
+    assert artifact_store.get(live.bundle_location) == payload
+    assert agent_store.get(live.id) is not None

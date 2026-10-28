@@ -285,7 +285,12 @@ def create_scheduled_tasks_router(
             agent_store=agent_store,
             permission_store=permission_store,
             conversation_store=conversation_store,
+            egm_new_work=True,
         )
+        if agent.managed_by == "egm-template":
+            from omnigent.server.egm import require_egm_target
+
+            require_egm_target(host_id, workspace, execution_target)
         validated_model, validated_effort = validate_session_model_metadata(
             model_override=model_override,
             reasoning_effort=reasoning_effort,
@@ -342,6 +347,8 @@ def create_scheduled_tasks_router(
 
     async def _bind_agent(agent: Agent, owner_id: str | None) -> Agent:
         """A task runs another user's agent from its owner's own copy, taken now."""
+        if agent.managed_by == "egm-template":
+            return agent
         return await asyncio.to_thread(
             agent_for_user, agent_store, artifact_store, agent, owner_id
         )
@@ -607,6 +614,7 @@ def create_scheduled_tasks_router(
                     agent_store=agent_store,
                     permission_store=permission_store,
                     conversation_store=conversation_store,
+                    egm_new_work=True,
                 )
                 await validate_permission_mode_agent_support(
                     permission_mode=new_mode,

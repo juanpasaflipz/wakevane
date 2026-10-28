@@ -93,3 +93,20 @@ describe("isAcpHarnessAgent", () => {
     expect(isAcpHarnessAgent(null)).toBe(false);
   });
 });
+
+it("orders marked Design review after Debby without adopting a custom name", () => {
+  const custom = agent({ name: "egm-review", display_name: "My review", builtin: false });
+  const packaged = agent({
+    name: "egm-review",
+    display_name: "Design review",
+    builtin: true,
+    workflow_kind: "egm-template",
+  });
+  const groups = partitionAgentsByKind([
+    packaged,
+    custom,
+    agent({ name: "debby", display_name: "Debby" }),
+  ]);
+  expect(groups.builtins.map((a) => a.display_name)).toEqual(["Debby", "Design review"]);
+  expect(groups.customs).toEqual([custom]);
+});

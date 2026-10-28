@@ -11234,7 +11234,24 @@ async def _create_session_from_existing_agent(
         agent_store=agent_store,
         permission_store=permission_store,
         conversation_store=conversation_store,
+        egm_continuation=bool(body.parent_session_id),
     )
+
+    if agent.managed_by in {"egm-template", "egm-session"}:
+        from omnigent.server.egm import (
+            reject_egm_overrides,
+            require_egm_target,
+            validate_continuation,
+        )
+
+        reject_egm_overrides(body)
+        if agent.managed_by == "egm-session":
+            body = await validate_continuation(
+                agent, body, request, user_id, permission_store, conversation_store, artifact_store
+            )
+        elif body.parent_session_id or body.sub_agent_name:
+            raise OmnigentError("Start Design review as a new root", code=ErrorCode.INVALID_INPUT)
+        require_egm_target(body.host_id, body.workspace, body.host_type)
 
     # Top-level Smart Routing: "auto" on a native wrapper agent means the client
     # picked Smart Routing with no bundle agent, and its ``agent_id`` is only a
@@ -11587,6 +11604,16 @@ async def _create_session_from_existing_agent(
             request=request,
         )
 
+    if agent.managed_by in {"egm-template", "egm-session"}:
+        from omnigent.server.egm import validate_egm_output
+
+        await validate_egm_output(
+            getattr(request.app.state, "host_registry", None),
+            body.host_id,
+            canonical_workspace,
+            getattr(request.app.state, "host_store", None),
+        )
+
     from omnigent.server.routes._session_harness_readiness import (
         validate_create_harness_readiness,
     )
@@ -11747,6 +11774,10 @@ async def _create_session_from_existing_agent(
 
     native_agent = native_coding_agent_for_agent_name(agent.name)
     initial_labels = dict(body.labels) if body.labels else {}
+    if agent.managed_by in {"egm-template", "egm-session"}:
+        initial_labels["omnigent.egm.snapshot"] = "true"
+        initial_labels["omnigent.egm.source_digest"] = agent.bundle_location.rsplit("/", 1)[-1]
+        initial_labels["omnigent.egm.source_version"] = str(agent.version)
     initial_labels.update(registry_labels)
     if created_worktree_path is not None:
         from omnigent.server.routes._host_worktree import (
@@ -11798,6 +11829,7 @@ async def _create_session_from_existing_agent(
     # agent stays on it: collaborators act in the owner's session. A failed create
     # below keeps the copy: it is listed to its owner from the start, so another of
     # their requests may already be using it.
+    egm_new_snapshot = agent.managed_by == "egm-template"
     if _parent_for_routing is None or _parent_for_routing.agent_id != agent.id:
         agent = await asyncio.to_thread(
             agent_for_user, agent_store, artifact_store, agent, user_id
@@ -11836,6 +11868,10 @@ async def _create_session_from_existing_agent(
                 **snapshot_kwargs,
             )
     except NameAlreadyExistsError as exc:
+        if egm_new_snapshot:
+            from omnigent.server.egm import discard_failed_snapshot
+
+            await asyncio.to_thread(discard_failed_snapshot, agent_store, artifact_store, agent)
         if (
             created_worktree_path is not None
             and body.host_id is not None
@@ -11854,6 +11890,10 @@ async def _create_session_from_existing_agent(
             )
         raise OmnigentError(str(exc), code=ErrorCode.CONFLICT) from exc
     except Exception:
+        if egm_new_snapshot:
+            from omnigent.server.egm import discard_failed_snapshot
+
+            await asyncio.to_thread(discard_failed_snapshot, agent_store, artifact_store, agent)
         # Broad catch is intentional: ANY create_conversation failure
         # (integrity error, name clash, ...) must trigger orphan-worktree
         # cleanup before the error propagates. We re-raise unchanged

@@ -1191,6 +1191,14 @@ def register_core_routes(
                 runner_router=runner_router,
             )
 
+        if parent_conv is not None and parent_conv.agent_id:
+            parent_agent = await asyncio.to_thread(agent_store.get, parent_conv.agent_id)
+            if parent_agent and parent_agent.managed_by in {"egm-template", "egm-session"}:
+                raise OmnigentError(
+                    "Design reviews only accept declared Goldfish children",
+                    code=ErrorCode.CONFLICT,
+                )
+
         bundle_bytes = await bundle.read()
         # Validate the bundle BEFORE any row exists: the external-host
         # branch below needs the spec's os_env.cwd for workspace
@@ -3561,8 +3569,50 @@ def register_core_routes(
                 agent_store=agent_store,
                 permission_store=permission_store,
                 conversation_store=conversation_store,
+                egm_new_work=True,
             )
         assert base_agent is not None
+        egm_host: str | None = None
+        egm_workspace: str | None = None
+        egm_fork = base_agent.managed_by in {"egm-template", "egm-session"}
+        if egm_fork:
+            from omnigent.db.utils import builtin_agent_id
+            from omnigent.server.egm import (
+                EGM_NAME,
+                reject_egm_overrides,
+                require_available,
+                require_egm_target,
+                validate_egm_output,
+            )
+
+            base_agent = await asyncio.to_thread(agent_store.get, builtin_agent_id(EGM_NAME))
+            if base_agent is None:
+                raise OmnigentError("Design review is unavailable", code=ErrorCode.CONFLICT)
+            require_available(agent_store, base_agent)
+            reject_egm_overrides(body)
+            egm_host = body.host_id or source.host_id
+            egm_workspace = body.workspace or source.workspace
+            require_egm_target(egm_host, egm_workspace, body.host_type)
+            assert egm_host is not None and egm_workspace is not None
+            from omnigent.server.routes._session_create_validation import (
+                validate_existing_host_workspace,
+            )
+
+            egm_workspace = await validate_existing_host_workspace(
+                user_id=user_id,
+                host_id=egm_host,
+                workspace=egm_workspace,
+                agent=base_agent,
+                agent_cache=agent_cache,
+                host_store=getattr(request.app.state, "host_store", None),
+                host_registry=getattr(request.app.state, "host_registry", None),
+            )
+            await validate_egm_output(
+                getattr(request.app.state, "host_registry", None),
+                egm_host,
+                egm_workspace,
+                getattr(request.app.state, "host_store", None),
+            )
 
         if source.inference_snapshot is not None and switching_agent:
             from omnigent.harness_aliases import canonicalize_harness
@@ -3616,7 +3666,7 @@ def register_core_routes(
 
         # Cross-user forks copy the agent (bundle under the copy's id) so its owner
         # can never change code in the caller's sessions; same-user forks share it.
-        needs_own_copy = agent_needs_own_copy(base_agent, user_id)
+        needs_own_copy = not egm_fork and agent_needs_own_copy(base_agent, user_id)
         if needs_own_copy and artifact_store is None:
             raise OmnigentError("artifact store is not configured", code=ErrorCode.INTERNAL_ERROR)
 
@@ -3899,7 +3949,14 @@ def register_core_routes(
 
         # Copied last, after every validation above; the copy row itself is
         # inserted inside fork_conversation's transaction.
-        fork_agent_id = base_agent.id
+        egm_snapshot = None
+        if egm_fork:
+            from omnigent.server.egm import snapshot_agent
+
+            egm_snapshot = await asyncio.to_thread(
+                snapshot_agent, agent_store, artifact_store, base_agent, user_id
+            )
+        fork_agent_id = egm_snapshot.id if egm_snapshot else base_agent.id
         clone_location: str | None = None
         if needs_own_copy:
             assert artifact_store is not None
@@ -3909,6 +3966,12 @@ def register_core_routes(
             )
 
         async def drop_unused_copy() -> None:
+            if egm_snapshot is not None:
+                from omnigent.server.egm import discard_failed_snapshot
+
+                await asyncio.to_thread(
+                    discard_failed_snapshot, agent_store, artifact_store, egm_snapshot
+                )
             if clone_location is not None and artifact_store is not None:
                 await asyncio.to_thread(
                     _delete_stored_session_bundle_after_failure, artifact_store, clone_location
@@ -3968,6 +4031,24 @@ def register_core_routes(
         except Exception:
             await drop_unused_copy()
             raise
+
+        if egm_fork:
+            assert egm_host is not None
+            await asyncio.to_thread(
+                conversation_store.set_labels,
+                new_conv.id,
+                {
+                    "omnigent.egm.snapshot": "true",
+                    "omnigent.egm.source_digest": base_agent.bundle_location.rsplit("/", 1)[-1],
+                    "omnigent.egm.source_version": str(base_agent.version),
+                },
+            )
+            new_conv = await asyncio.to_thread(
+                conversation_store.set_host_id,
+                new_conv.id,
+                host_id=egm_host,
+                workspace=egm_workspace,
+            )
 
         # Create the fork-owned rows the rewritten items now reference —
         # before the fork is announced or returned, so no reader sees the ids

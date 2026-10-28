@@ -146,7 +146,12 @@ def _to_agent_object(agent: Agent, agent_cache: AgentCache) -> AgentObject:
         # random id. The picker protects the former from being shadowed
         # by a same-named ``omnigent run`` upload, but lets a newer
         # upload supersede the latter.
-        builtin=agent.session_id is None and agent.id == builtin_agent_id(agent.name),
+        builtin=(
+            agent.session_id is None
+            and agent.id == builtin_agent_id(agent.name)
+            and (agent.name != "egm-review" or agent.managed_by == "egm-template")
+        ),
+        workflow_kind="egm-template" if agent.managed_by == "egm-template" else None,
     )
 
 
@@ -332,6 +337,8 @@ def create_builtin_agents_router(
         agent = await asyncio.to_thread(agent_store.get, agent_id)
         if agent is None or agent.kind != "user" or agent.created_by != user_id:
             raise OmnigentError(f"Agent not found: {agent_id!r}", code=ErrorCode.NOT_FOUND)
+        if agent.managed_by == "egm-session":
+            raise OmnigentError("Design review snapshots are immutable", code=ErrorCode.CONFLICT)
         if artifact_store is None or not agent_store.supports_config_edit:
             raise HTTPException(status_code=501, detail="Agent configuration editing unavailable")
         return agent
@@ -512,6 +519,12 @@ def create_builtin_agents_router(
             )
         ):
             raise OmnigentError(f"Agent not found: {agent_id!r}", code=ErrorCode.NOT_FOUND)
+        if agent.managed_by == "egm-session":
+            raise OmnigentError("Agent not found", code=ErrorCode.NOT_FOUND)
+        if agent.managed_by == "egm-template":
+            from omnigent.server.egm import require_available
+
+            require_available(agent_store, agent)
         summary = await asyncio.to_thread(_to_agent_object, agent, agent_cache)
         return AgentDetailObject(**summary.model_dump(), user_owned=agent.kind == "user")
 

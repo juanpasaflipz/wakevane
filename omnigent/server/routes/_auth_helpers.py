@@ -526,6 +526,10 @@ def require_agent_owner(
     :raises OmnigentError: 403 when the caller is neither the owner nor an
         admin.
     """
+    if agent.managed_by == "egm-session":
+        raise OmnigentError(
+            "Design review snapshots are immutable; start a new run", code=ErrorCode.CONFLICT
+        )
     # Auth disabled, local single-user, and workspace admins bypass.
     if _can_mutate_agent(user_id, agent, permission_store):
         return

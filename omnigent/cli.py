@@ -1606,7 +1606,10 @@ def _preregister_agent(  # type: ignore[explicit-any]  # agent_store / artifact_
         new_loc = f"{existing.id}/{bundle_hash}"
         # Sha-segment compare: legacy rows keep an ``ag_``-prefixed left
         # segment (physical artifact key); only the sha encodes content.
-        if existing.bundle_location.rsplit("/", 1)[-1] != bundle_hash:
+        if (
+            existing.managed_by is not None
+            or existing.bundle_location.rsplit("/", 1)[-1] != bundle_hash
+        ):
             artifact_store.put(new_loc, bundle_bytes)
             agent_store.update(existing.id, bundle_location=new_loc)
             # Swap the cache's extracted bundle in lockstep. Without

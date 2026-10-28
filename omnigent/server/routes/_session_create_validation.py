@@ -241,6 +241,8 @@ async def validate_session_agent(
     agent_store: AgentStore,
     permission_store: PermissionStore | None,
     conversation_store: ConversationStore,
+    egm_continuation: bool = False,
+    egm_new_work: bool = False,
 ) -> Any:
     """Load a bindable agent and authorize session-scoped agent access."""
     agent = await asyncio.to_thread(agent_store.get, agent_id)
@@ -249,7 +251,22 @@ async def validate_session_agent(
             f"Agent not found: {agent_id!r}",
             code=ErrorCode.NOT_FOUND,
         )
+    if agent.managed_by == "egm-template":
+        from omnigent.server.egm import require_available
+
+        require_available(agent_store, agent)
+    if agent.managed_by == "egm-session" and not (egm_continuation or egm_new_work):
+        raise OmnigentError(
+            "Start a new Design review; snapshots cannot start roots", code=ErrorCode.CONFLICT
+        )
     require_user_agent_visible(agent, user_id)
+
+    async def authorized_agent():
+        if agent.managed_by == "egm-session" and egm_new_work:
+            from omnigent.server.egm import current_template
+
+            return await asyncio.to_thread(current_template, agent_store)
+        return agent
 
     # Session-scoped agents belong to a specific session. The caller must have
     # at least READ access to that owning session — otherwise they can execute
@@ -265,7 +282,7 @@ async def validate_session_agent(
         if access_user is None and local_single_user_enabled():
             access_user = RESERVED_USER_LOCAL
         if agent.created_by is not None and agent.created_by == access_user:
-            return agent  # Its owner can always use it.
+            return await authorized_agent()
         try:
             await require_access(
                 access_user,
@@ -283,7 +300,7 @@ async def validate_session_agent(
                 agent, access_user, permission_store, conversation_store
             ):
                 raise
-    return agent
+    return await authorized_agent()
 
 
 # ponytail: checks the first 50 roots using the agent; a caller who can read only a

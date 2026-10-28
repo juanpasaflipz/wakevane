@@ -206,6 +206,7 @@ class SqlAgent(OmnigentBase):
     # AGENT_KIND: server=1, user=2). The store converts to/from the
     # string name at the row↔entity boundary.
     kind: Mapped[int] = mapped_column(SmallInteger)
+    managed_by: Mapped[str | None] = mapped_column(String(32), nullable=True)
     description: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
     updated_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Owner of a user agent (the creating user). Gates agent-code mutation to

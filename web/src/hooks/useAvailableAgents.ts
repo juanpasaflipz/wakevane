@@ -34,6 +34,7 @@ export interface AvailableAgent {
   // same-named `omnigent run` upload, but lets a newer upload supersede a
   // user-registered template (builtin === false).
   builtin?: boolean;
+  workflow_kind?: "egm-template" | null;
   // True when the server declares this agent's harness generic-ACP (harness
   // catalog ``integration_mode === "acp-subprocess"``) — a builtin ACP CLI row
   // (devin / grok) or a user-configured ``acp:<slug>`` agent. Stamped on by
@@ -110,6 +111,7 @@ interface BuiltinAgentWire {
   // True only for server-seeded built-ins (deterministic id). Absent on
   // older servers, where every catalog row degrades to a protected entry.
   builtin?: boolean;
+  workflow_kind?: "egm-template" | null;
   created_at?: number | null;
   updated_at?: number | null;
 }
@@ -148,7 +150,8 @@ function agentFromWire(a: BuiltinAgentWire): AvailableAgent {
   return {
     id: a.id,
     name: a.name,
-    display_name: displayNameForAgent(a.name, a.harness),
+    display_name:
+      a.workflow_kind === "egm-template" ? "Design review" : displayNameForAgent(a.name, a.harness),
     description: a.description ?? null,
     harness: a.harness ?? null,
     skills: a.skills ?? [],
@@ -156,6 +159,7 @@ function agentFromWire(a: BuiltinAgentWire): AvailableAgent {
     // sensitive to absent-vs-undefined. Logic that reads builtin treats
     // undefined as "protected" (same as true), so omission is safe.
     ...(a.builtin !== undefined ? { builtin: a.builtin } : {}),
+    ...(a.workflow_kind ? { workflow_kind: a.workflow_kind } : {}),
     ...(a.created_at !== undefined ? { created_at: a.created_at } : {}),
   };
 }
@@ -211,6 +215,7 @@ export function useSessionAgents(enabled = true) {
     if (!enabled || !mine.data) return undefined;
     const agents = new Map<string, AvailableAgent>();
     for (const row of mine.data.pages.flatMap((page) => page.data).slice(0, 30)) {
+      if (row.labels?.["omnigent.egm.snapshot"] === "true") continue;
       if (!row.agent_id || !row.agent_name || agents.has(row.agent_id)) continue;
       agents.set(row.agent_id, {
         id: row.agent_id,

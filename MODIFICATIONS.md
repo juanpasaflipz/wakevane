@@ -23,7 +23,7 @@ the `omnigent` and `omni` commands still work, and settings keep their
 | Credential encryption | A local-key envelope cipher (AES-256-GCM, per-value data keys, key rotation) as the default, KMS moved to the same envelope with legacy values still readable, and `omnigent credentials rewrap`. | `omnigent/stores/credential_store/{envelope,local_cipher,rewrap}.py` |
 | Web UI | Subscriptions page, Efficiency tab on the Usage page, Shims page. | `web/src/pages/`, `web/src/components/{subscriptions,usage}/` |
 | Harness bench | A cost-per-solved-task probe. | `tests/harness_bench/probes/cost_per_solved_task.py` |
-| Examples | A software-factory foreman with triager, fixer and watcher workers; a shim-janitor agent. | `examples/factory/`, `examples/shim-janitor/` |
+| Examples | A software-factory foreman with triager, fixer and watcher workers; a shim-janitor agent; an opt-in Elephant-Goldfish design-review bundle. | `examples/factory/`, `examples/shim-janitor/`, `examples/egm/` |
 | Deployment | One-command Railway deploy built from source, with generated secrets and a persistent volume. | `deploy/railway/deploy.sh`, `railway.toml` |
 | Branding | The WakeVane name, tagline and mark as default branding, with the "Powered by Omnigent" credit shown. | `omnigent/resources/branding/wakevane/` |
 
@@ -40,3 +40,5 @@ the `omnigent` and `omni` commands still work, and settings keep their
 | Auth helpers | A generic `require_admin` helper. |
 | Railway config | Builds from source instead of pulling upstream's prebuilt image. |
 | Docs | Subscriptions, shims, efficiency, credential encryption, Railway, GitHub App setup, and feature-flag inventory updated for the above. |
+
+- Added default-off `egm_template` Design review entry, durable template ownership, immutable run snapshots, and connected-host preflight. Deployment requires migration and coordinated writer upgrade; see `examples/egm/README.md`.

@@ -30,6 +30,8 @@ class Agent:
         Gates agent-code mutation to its owner. ``None`` for server agents
         and rows created before this field existed; an unowned user agent is
         admin-only to mutate.
+    :param managed_by: Internal packaged-template or immutable-run ownership;
+        NULL for ordinary operator/user agents. Never inferred from names or IDs.
     :param kind: ``"server"`` for agents the operator registered (built-ins,
         ``--agent``), ``"user"`` for agents users upload or install.
     """
@@ -44,6 +46,7 @@ class Agent:
     session_id: str | None = None  # a conversation using it; None for server agents
     created_by: str | None = None
     kind: str = "server"
+    managed_by: str | None = None
 
     @property
     def operator_authored(self) -> bool:

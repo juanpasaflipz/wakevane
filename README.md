@@ -96,6 +96,9 @@ is in [`designs/HARNESS_FLYWHEEL.md`](designs/HARNESS_FLYWHEEL.md).
   dispatches a sandboxed fixer that must prove its work with tests and a
   recording, asks a human before merging, and hands the merge to a deploy
   watcher. No polling anywhere.
+- **Design review.** [`examples/egm`](examples/egm) adds an opt-in
+  Elephant-Goldfish workflow: versioned specifications, fresh independent
+  reviews, bounded revisions and an implementation handoff for human approval.
 
 
 ### Install WakeVane

@@ -1082,7 +1082,7 @@ async def _own_task_agent(deps: FireDeps, task: ScheduledTask) -> ScheduledTask:
     Tasks get the copy when created; this covers ones saved before that.
     """
     agent = await asyncio.to_thread(deps.agent_store.get, task.agent_id)
-    if agent is None:
+    if agent is None or agent.managed_by == "egm-template":
         return task
     bound = await asyncio.to_thread(
         agent_for_user, deps.agent_store, deps.artifact_store, agent, task.user_id
@@ -1113,14 +1113,33 @@ async def _create_session(
     stamped alongside the presentation labels; a presentation label wins a
     key collision so the UI contract is never overridden.
     """
-    conv: Conversation = await asyncio.to_thread(
-        deps.conversation_store.create_conversation,
-        agent_id=task.agent_id,
-        title=task.name,
-        host_id=task.host_id,
-        workspace=task.workspace,
-        terminal_launch_args=await _permission_mode_launch_args(deps, task),
-    )
+    launch_agent_id = task.agent_id
+    snapshot = None
+    agent = await asyncio.to_thread(deps.agent_store.get, task.agent_id)
+    if agent is not None and agent.managed_by == "egm-template":
+        from omnigent.server.egm import snapshot_agent
+
+        snapshot = await asyncio.to_thread(
+            snapshot_agent, deps.agent_store, deps.artifact_store, agent, task.user_id
+        )
+        launch_agent_id = snapshot.id
+    try:
+        conv: Conversation = await asyncio.to_thread(
+            deps.conversation_store.create_conversation,
+            agent_id=launch_agent_id,
+            title=task.name,
+            host_id=task.host_id,
+            workspace=task.workspace,
+            terminal_launch_args=await _permission_mode_launch_args(deps, task),
+        )
+    except Exception:
+        if snapshot is not None:
+            from omnigent.server.egm import discard_failed_snapshot
+
+            await asyncio.to_thread(
+                discard_failed_snapshot, deps.agent_store, deps.artifact_store, snapshot
+            )
+        raise
     reasoning_effort = task.reasoning_effort
     if reasoning_effort is None:
         reasoning_effort = await _spec_reasoning_effort(deps, task)
@@ -1139,6 +1158,14 @@ async def _create_session(
     # the override reload above) so the labels land on the conversation returned
     # to the launch/dispatch caller, not a stale pre-label reload of it.
     labels = {**(extra_labels or {}), **await _presentation_labels(deps, task)}
+    if launch_agent_id != task.agent_id and agent is not None:
+        labels.update(
+            {
+                "omnigent.egm.snapshot": "true",
+                "omnigent.egm.source_digest": agent.bundle_location.rsplit("/", 1)[-1],
+                "omnigent.egm.source_version": str(agent.version),
+            }
+        )
     if labels:
         await asyncio.to_thread(deps.conversation_store.set_labels, conv.id, labels)
         conv.labels.update(labels)
@@ -1286,6 +1313,13 @@ async def _validate_fire_session_inputs(
             permission_store=deps.permission_store,
             conversation_store=deps.conversation_store,
         )
+        if agent.managed_by == "egm-template":
+            from omnigent.server.egm import require_egm_target, validate_egm_output
+
+            require_egm_target(task.host_id, task.workspace, task.execution_target)
+            await validate_egm_output(
+                deps.host_registry, task.host_id, task.workspace, deps.host_store
+            )
         validate_session_model_metadata(
             model_override=task.model_override,
             reasoning_effort=task.reasoning_effort,

@@ -24,8 +24,15 @@ from omnigent.db.utils import (
     run_write_transaction,
 )
 from omnigent.entities import Agent, PagedList
-from omnigent.errors import StaleCursorError
+from omnigent.errors import ErrorCode, OmnigentError, StaleCursorError
 from omnigent.stores.agent_store import _UNSET, AgentStore
+from omnigent.stores.agent_store.egm import (
+    EGM_NAME,
+    TEMPLATE,
+    EgmAgentStoreMixin,
+    lock_egm,
+    mutable_agent,
+)
 
 # ponytail: fixed read cap per "my agents" call. A user with more fork/switch
 # copies than this newer than an original sees that original only on a later
@@ -39,7 +46,7 @@ def _is_original(row: SqlAgent) -> bool:
     return location.startswith((f"{row.id}/", f"ag_{row.id}/"))
 
 
-class SqlAlchemyAgentStore(AgentStore):
+class SqlAlchemyAgentStore(EgmAgentStoreMixin, AgentStore):
     """
     SQLAlchemy-backed implementation of :class:`AgentStore`.
 
@@ -148,6 +155,7 @@ class SqlAlchemyAgentStore(AgentStore):
         created_at = now_epoch()
 
         def write(session: Session) -> Agent:
+            lock_egm(session)
             # Template names are unique within a workspace. This can't be a
             # partial unique index (MySQL has none), so enforce it here.
             conflict = session.execute(
@@ -249,7 +257,14 @@ class SqlAlchemyAgentStore(AgentStore):
                 SqlAgent.kind == encode_agent_kind("server"), SqlAgent.created_by.is_(None)
             )
             in_workspace = SqlAgent.workspace_id == current_workspace_id()
-            stmt = select(SqlAgent).where(in_workspace, is_template)
+            visible = or_(
+                SqlAgent.managed_by.is_(None),
+                (SqlAgent.managed_by == TEMPLATE)
+                & (SqlAgent.bundle_location == self.egm_bundle_location)
+                if self.egm_bundle_location
+                else SqlAgent.managed_by.is_(None),
+            )
+            stmt = select(SqlAgent).where(in_workspace, is_template, visible)
             if after:
                 sub = (
                     select(SqlAgent.created_at)
@@ -337,6 +352,8 @@ class SqlAlchemyAgentStore(AgentStore):
         updated_at = now_epoch()
 
         def write(session: Session) -> SqlAgent | None:
+            lock_egm(session)
+            mutable_agent(session.get(SqlAgent, (current_workspace_id(), agent_id)))
             stmt = (
                 update(SqlAgent)
                 .where(
@@ -345,6 +362,7 @@ class SqlAlchemyAgentStore(AgentStore):
                 )
                 .values(
                     bundle_location=bundle_location,
+                    managed_by=None,
                     version=SqlAgent.version + 1,
                     updated_at=updated_at,
                 )
@@ -402,6 +420,7 @@ class SqlAlchemyAgentStore(AgentStore):
             SqlAgent.created_at == expected.created_at,
             SqlAgent.kind == encode_agent_kind(expected.kind),
             SqlAgent.created_by == expected.created_by,
+            SqlAgent.managed_by == expected.managed_by,
             SqlAgent.version == expected.version,
             SqlAgent.bundle_location == expected.bundle_location,
         )
@@ -412,10 +431,13 @@ class SqlAlchemyAgentStore(AgentStore):
             bundle_location == expected.bundle_location
             and description == expected.description
             and not claim_owner
+            and expected.managed_by is None
         )
         updated_at = now_epoch()
 
         def write(session: Session) -> SqlAgent | None:
+            lock_egm(session)
+            mutable_agent(session.get(SqlAgent, (current_workspace_id(), expected.id)))
             if unchanged:
                 return session.execute(
                     select(SqlAgent).where(*matches).with_for_update()
@@ -427,6 +449,7 @@ class SqlAlchemyAgentStore(AgentStore):
                     .where(*matches)
                     .values(
                         bundle_location=bundle_location,
+                        managed_by=None,
                         description=description,
                         created_by=created_by if claim_owner else expected.created_by,
                         version=SqlAgent.version + 1,
@@ -457,6 +480,7 @@ class SqlAlchemyAgentStore(AgentStore):
         """
 
         def write(session: Session) -> bool:
+            lock_egm(session)
             row = session.get(SqlAgent, (current_workspace_id(), agent_id))
             if not row:
                 return False
@@ -492,6 +516,21 @@ class SqlAlchemyAgentStore(AgentStore):
         created_at = now_epoch()
 
         def write(session: Session) -> Agent:
+            lock_egm(session)
+            if (
+                name == EGM_NAME
+                and session.scalar(
+                    select(SqlAgent.id).where(
+                        SqlAgent.workspace_id == current_workspace_id(),
+                        SqlAgent.name == name,
+                        SqlAgent.kind == encode_agent_kind("server"),
+                    )
+                )
+                is not None
+            ):
+                raise OmnigentError(
+                    "egm-review is a server agent; rename your agent", code=ErrorCode.CONFLICT
+                )
             row = SqlAgent(
                 id=agent_id,
                 created_at=created_at,
@@ -529,6 +568,7 @@ class SqlAlchemyAgentStore(AgentStore):
             SqlAgent.workspace_id == current_workspace_id(),
             SqlAgent.kind == encode_agent_kind("user"),
             SqlAgent.created_by == owner,
+            SqlAgent.managed_by.is_(None),
         )
         with self._session("list_user_agents") as session:
             stmt = select(SqlAgent).where(*mine)

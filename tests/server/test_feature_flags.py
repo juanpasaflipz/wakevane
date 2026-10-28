@@ -45,6 +45,7 @@ def test_unset_or_empty_uses_feature_defaults(environ: dict[str, str]) -> None:
         "splittable_terminal_view_ui": False,
         "shims_page": True,
         "subscriptions_page": True,
+        "egm_template": False,
     }
 
 

@@ -138,6 +138,17 @@ def validate_agent_bundle(
                 expand_env=False,
                 enforce_handler_allowlist=enforce_handler_allowlist,
             )
+            import yaml
+
+            for config in (Path(tmpdir) / "agent").glob("*.yaml"):
+                document = yaml.safe_load(config.read_text())
+                if (
+                    isinstance(document, dict)
+                    and {"managed_by", "workflow_kind"} & document.keys()
+                ):
+                    raise OmnigentError(
+                        "Agent ownership fields are server-internal", code=ErrorCode.INVALID_INPUT
+                    )
     except OmnigentError:
         raise
     except ExtractionError as exc:
@@ -212,6 +223,14 @@ def agent_for_user(
     Without an artifact store or user agent support there is nowhere to put a
     copy, so *agent* is returned as is.
     """
+    if agent.managed_by == "egm-template":
+        from omnigent.server.egm import snapshot_agent
+
+        return snapshot_agent(agent_store, artifact_store, agent, user_id)
+    if agent.managed_by == "egm-session":
+        raise OmnigentError(
+            "Start a new Design review instead of reusing a snapshot", code=ErrorCode.CONFLICT
+        )
     if (
         artifact_store is None
         or not agent_store.supports_user_agents
