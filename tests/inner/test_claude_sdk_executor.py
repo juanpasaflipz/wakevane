@@ -29,6 +29,28 @@ from omnigent.inner.executor import (
 )
 
 
+@pytest.mark.parametrize("platform", ["darwin", "linux", "win32"])
+def test_claude_scratch_roots_include_macos_fixed_tmp(platform):
+    from omnigent.inner.claude_sdk_executor import _claude_internal_write_roots
+
+    with (
+        patch("omnigent.inner.claude_sdk_executor.sys.platform", platform),
+        patch("omnigent.inner.claude_sdk_executor.stable_user_id", return_value="501"),
+        patch(
+            "omnigent.inner.claude_sdk_executor.tempfile.gettempdir", return_value="/custom/tmp"
+        ),
+        patch.object(Path, "home", return_value=Path("/synthetic/home")),
+        patch.object(Path, "mkdir") as mkdir,
+    ):
+        roots = _claude_internal_write_roots()
+
+    assert Path("/custom/tmp/claude-501") in roots
+    assert (Path("/tmp/claude-501") in roots) == (platform == "darwin")
+    assert Path("/tmp") not in roots
+    assert Path("/private/tmp") not in roots
+    assert mkdir.call_count == len(roots)
+
+
 class _SDKClient:
     """Quiet SDK lifecycle; scenarios override the interactions they exercise."""
 

@@ -1398,6 +1398,9 @@ def _claude_internal_write_roots() -> list[pathlib.Path]:
         pathlib.Path.home() / ".npm" / "_logs",
         pathlib.Path(tempfile.gettempdir()) / f"claude-{stable_user_id()}",
     ]
+    # Some macOS Claude builds use /tmp directly instead of honoring TMPDIR.
+    if sys.platform == "darwin":
+        roots.append(pathlib.Path("/tmp") / f"claude-{stable_user_id()}")
     for root in roots:
         root.mkdir(parents=True, exist_ok=True)
     return roots
