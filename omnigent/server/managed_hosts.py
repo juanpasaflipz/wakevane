@@ -205,6 +205,7 @@ from omnigent.onboarding.sandboxes.base import (
 # without importing omnigent.server; re-exported here (its parser is here) so
 # existing `from omnigent.server.managed_hosts import RepoWorkspace` keeps working.
 from omnigent.onboarding.sandboxes.types import GitCloneOptions, RepoWorkspace
+from omnigent.server.compute_meter import parse_metering_limits
 from omnigent.stores.host_store import Host, HostStore
 
 if TYPE_CHECKING:
@@ -714,6 +715,11 @@ class ManagedSandboxConfig:
         Supplies choices without selecting a default or provisioning a host.
         Raise :class:`NoReachableModels` when no model can serve the harness;
         the picker then blocks launch instead of offering Default.
+    :param funding: ``"deployment"`` (operator-paid, the historical behavior)
+        or ``"trial"``: every launch must pass funded trial admission and
+        reserve its compute in the account's trial ledger.
+    :param metering: :class:`~omnigent.server.compute_meter.MeteringLimits`
+        the compute meter enforces on this target's generations, or ``None``.
     """
 
     server_url: str
@@ -727,6 +733,12 @@ class ManagedSandboxConfig:
     default_model_options: Callable[[str, str | None], Awaitable[list[dict[str, Any]]]] | None = (
         None
     )
+    funding: str = "deployment"
+    # Idle shutdown and lifetime cap enforced by the compute meter; see ``sandbox.metering``.
+    metering: Any = None
+
+
+SANDBOX_FUNDING_MODES = frozenset({"deployment", "trial"})
 
 
 class NoReachableModels(Exception):
@@ -809,6 +821,10 @@ class ManagedSandboxDeployment:
         dataclass_field(default_factory=dict)
     )
     shutdown_drain_s: float = 0.0
+    # Funded trial policy, filled in by ``create_app``; ``None`` denies trial targets.
+    funded_trial: Any = None
+    # Compute meter (``omnigent.server.compute_meter``), filled in by ``create_app``.
+    compute_meter: Any = None
 
     def __post_init__(self) -> None:
         # Enforce the "never empty" invariant the accessors rely on
@@ -1619,6 +1635,12 @@ def _parse_single_provider_sandbox_config(raw: dict[str, object]) -> ManagedSand
         )
     warm_pool = _parse_agent_sandbox_warm_pool(raw)
     git_clone = _parse_git_clone_options(raw.get("git_clone"))
+    funding = raw.get("funding", "deployment")
+    if not isinstance(funding, str) or funding not in SANDBOX_FUNDING_MODES:
+        raise ValueError(
+            "server config 'sandbox.funding' must be one of: "
+            f"{', '.join(sorted(SANDBOX_FUNDING_MODES))} (got {funding!r})"
+        )
     server_url = raw.get("server_url")
     if not isinstance(server_url, str) or not server_url.strip():
         raise ValueError(
@@ -1628,6 +1650,14 @@ def _parse_single_provider_sandbox_config(raw: dict[str, object]) -> ManagedSand
     # Validated regardless of provider (like server_url): a malformed
     # host_config should stop startup even for staged/unsupported providers.
     host_config = _parse_host_config(raw)
+    if funding == "trial" and (
+        (host_config or {}).get("providers") or (host_config or {}).get("inference")
+    ):
+        # Trial workspaces reach models only through the metered gateway.
+        raise ValueError(
+            "server config 'sandbox.host_config' must not configure inference providers "
+            "when 'sandbox.funding' is 'trial'"
+        )
     model_discovery = raw.get("model_discovery", {})
     if not isinstance(model_discovery, dict):
         raise ValueError("sandbox.model_discovery must be a mapping")
@@ -1913,7 +1943,20 @@ def _parse_single_provider_sandbox_config(raw: dict[str, object]) -> ManagedSand
         host_config=host_config,
         model_discovery=model_discovery,
         git_clone=git_clone,
+        funding=funding,
+        metering=parse_metering_limits(
+            raw.get("metering"),
+            funding=funding,
+            default_lifetime_s=_trial_lifetime_s() if funding == "trial" else None,
+        ),
     )
+
+
+def _trial_lifetime_s() -> int:
+    """Lifetime one trial compute reservation covers, from operator settings."""
+    from omnigent.server.funded_trial import FundedTrialConfig
+
+    return int(FundedTrialConfig.from_environment().max_compute_hours * 3600)
 
 
 def _parse_modal_image(raw: dict[str, object]) -> str | None:
@@ -3718,6 +3761,12 @@ class SandboxStageObserver(Protocol):
         """
 
 
+WorkspacePreparer = Callable[["SandboxHostLauncher", str, str], None]
+"""Blocking step run in a worker thread once the host is online and before any
+runner starts, given ``(launcher, sandbox_id, workspace)``. Raising fails the
+launch and tears the new sandbox down."""
+
+
 async def launch_managed_host(
     *,
     config: ManagedSandboxDeployment,
@@ -3728,6 +3777,7 @@ async def launch_managed_host(
     agent_name: str | None = None,
     on_stage: SandboxStageObserver | None = None,
     host_id: str | None = None,
+    prepare_workspace: WorkspacePreparer | None = None,
 ) -> ManagedHostLaunch:
     """
     Provision a sandbox, start a host in it, and wait until it registers.
@@ -3773,6 +3823,8 @@ async def launch_managed_host(
     :param host_id: Id to register the host under — a create's
         ``host_id`` — or ``None`` to mint one. A requested id also makes the
         host route by it (see :func:`host_slice_key_enabled`).
+    :param prepare_workspace: Optional step that must succeed before the
+        sandbox is handed to a runner; see :data:`WorkspacePreparer`.
     :returns: The registered host id + in-sandbox workspace path
         (the cloned repository directory when *repo* is set).
     :raises HTTPException: 400 when *provider* is not configured or the
@@ -3810,6 +3862,7 @@ async def launch_managed_host(
         on_stage=on_stage,
         slice_key_enabled=slice_key_enabled,
         owner_credentials=config.owner_credentials,
+        prepare_workspace=prepare_workspace,
     )
     return ManagedHostLaunch(host_id=host_id, workspace=workspace)
 
@@ -3823,6 +3876,7 @@ async def relaunch_managed_host(
     agent_name: str | None = None,
     on_stage: SandboxStageObserver | None = None,
     slice_key_enabled: bool = False,
+    prepare_workspace: WorkspacePreparer | None = None,
 ) -> ManagedHostLaunch:
     """
     Provision a NEW sandbox generation for an existing managed host.
@@ -3857,6 +3911,8 @@ async def relaunch_managed_host(
         ``None`` disables progress reporting.
     :param slice_key_enabled: Whether the host routes by its own id, as at its
         first launch (see :func:`host_slice_key_enabled`).
+    :param prepare_workspace: Re-run on the fresh generation, whose workspace
+        starts from the image; see :data:`WorkspacePreparer`.
     :returns: The (unchanged) host id + fresh in-sandbox workspace.
     :raises HTTPException: 400 when the host's recorded provider no
         longer matches the configured launcher; 502 when
@@ -3910,6 +3966,7 @@ async def relaunch_managed_host(
             on_stage=on_stage,
             keep_host_on_failure=True,
             slice_key_enabled=slice_key_enabled,
+            prepare_workspace=prepare_workspace,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -4034,6 +4091,7 @@ async def _register_and_start_host(
     keep_host_on_failure: bool = False,
     slice_key_enabled: bool = False,
     owner_credentials: Mapping[str, Callable[[str], Mapping[str, object] | None]] | None = None,
+    prepare_workspace: WorkspacePreparer | None = None,
 ) -> str:
     """
     Arm the credential, start the in-sandbox host, and await its
@@ -4075,6 +4133,8 @@ async def _register_and_start_host(
         (:attr:`ManagedSandboxDeployment.owner_credentials`), so a first
         launch's failure teardown still acts as the owner. ``None`` binds
         none.
+    :param prepare_workspace: Run after the host is online; its failure
+        takes the same teardown path as a failed startup.
     :returns: The absolute in-sandbox workspace path.
     :raises HTTPException: 502 when cloning, host startup, or
         registration fails.
@@ -4124,6 +4184,8 @@ async def _register_and_start_host(
             on_stage=on_stage,
         )
         await _wait_for_host_online(host_store, host_id)
+        if prepare_workspace is not None:
+            await asyncio.to_thread(prepare_workspace, launcher, sandbox_id, workspace)
     except Exception as exc:
         # The provider allocated the sandbox before registration or startup
         # could fail, so both failures must attempt cleanup.

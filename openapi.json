@@ -309,6 +309,18 @@
             "format": "int64",
             "title": "Version",
             "type": "integer"
+          },
+          "workflow_kind": {
+            "anyOf": [
+              {
+                "const": "egm-template",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workflow Kind"
           }
         },
         "required": [
@@ -511,6 +523,18 @@
             "format": "int64",
             "title": "Version",
             "type": "integer"
+          },
+          "workflow_kind": {
+            "anyOf": [
+              {
+                "const": "egm-template",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workflow Kind"
           }
         },
         "required": [
@@ -3115,6 +3139,48 @@
           "level"
         ],
         "title": "GrantPermissionRequest",
+        "type": "object"
+      },
+      "GrantRequest": {
+        "description": "Operator-chosen terms for one account's trial.",
+        "properties": {
+          "allowance_usd": {
+            "exclusiveMinimum": 0.0,
+            "format": "double",
+            "maximum": 10000.0,
+            "title": "Allowance Usd",
+            "type": "number"
+          },
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Capabilities",
+            "type": "array"
+          },
+          "expires_in_days": {
+            "exclusiveMinimum": 0.0,
+            "format": "double",
+            "maximum": 366.0,
+            "title": "Expires In Days",
+            "type": "number"
+          },
+          "max_concurrent_roots": {
+            "default": 1,
+            "format": "int64",
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Max Concurrent Roots",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "allowance_usd",
+          "expires_in_days",
+          "capabilities"
+        ],
+        "title": "GrantRequest",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -10703,6 +10769,144 @@
         ]
       }
     },
+    "/v1/admin/funded-trial/grants/{user_id}": {
+      "delete": {
+        "operationId": "revoke_grant_v1_admin_funded_trial_grants__user_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Revoke Grant V1 Admin Funded Trial Grants  User Id  Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke Grant",
+        "tags": [
+          "funded trial"
+        ]
+      },
+      "get": {
+        "operationId": "get_grant_v1_admin_funded_trial_grants__user_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Grant V1 Admin Funded Trial Grants  User Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Grant",
+        "tags": [
+          "funded trial"
+        ]
+      },
+      "put": {
+        "operationId": "put_grant_v1_admin_funded_trial_grants__user_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Put Grant V1 Admin Funded Trial Grants  User Id  Put",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Grant",
+        "tags": [
+          "funded trial"
+        ]
+      }
+    },
     "/v1/agents": {
       "get": {
         "description": "List server agents, or with `scope=user` the caller's own agents.\n\nServer agents come from `agent_store.list()`, which never returns\nuser agents. `scope=user` returns the caller's user agents newest\nfirst, at most 50 per page and paged with `after` only; `last_id`\nis the last row the server read, which may not be in `data`.\n\n**Returns:** A `PaginatedList` of agents.",
@@ -11357,6 +11561,67 @@
         "summary": "Get Extension Asset",
         "tags": [
           "extensions"
+        ]
+      }
+    },
+    "/v1/funded-trial": {
+      "get": {
+        "operationId": "my_trial_v1_funded_trial_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response My Trial V1 Funded Trial Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "My Trial",
+        "tags": [
+          "funded trial"
+        ]
+      }
+    },
+    "/v1/funded-trial/gateway/anthropic/v1/messages": {
+      "post": {
+        "operationId": "messages_v1_funded_trial_gateway_anthropic_v1_messages_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Messages",
+        "tags": [
+          "funded trial"
+        ]
+      }
+    },
+    "/v1/funded-trial/gateway/anthropic/v1/messages/count_tokens": {
+      "post": {
+        "operationId": "count_tokens_v1_funded_trial_gateway_anthropic_v1_messages_count_tokens_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Count Tokens",
+        "tags": [
+          "funded trial"
         ]
       }
     },
@@ -14923,6 +15188,99 @@
         "summary": "Update Comment",
         "tags": [
           "comments"
+        ]
+      }
+    },
+    "/v1/sessions/{session_id}/design-review/outputs": {
+      "get": {
+        "operationId": "get_outputs_v1_sessions__session_id__design_review_outputs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Outputs V1 Sessions  Session Id  Design Review Outputs Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Outputs",
+        "tags": [
+          "design review"
+        ]
+      }
+    },
+    "/v1/sessions/{session_id}/design-review/outputs/files/{path}": {
+      "get": {
+        "operationId": "get_output_file_v1_sessions__session_id__design_review_outputs_files__path__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Output File",
+        "tags": [
+          "design review"
         ]
       }
     },

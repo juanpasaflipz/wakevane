@@ -2391,6 +2391,7 @@ export function NewChatLandingScreen() {
   // fails closed (option hidden) until the boot probe resolves.
   const info = useServerInfo();
   const managedSandboxesEnabled = info !== "loading" && info.managed_sandboxes_enabled;
+  const cloudDesignReviewEnabled = isFeatureEnabled(info, "egm_cloud");
   const mcpRegistryEnabled = info !== "loading" && !!info.enabled_connections?.includes("mcp");
   const {
     selected: mcpRegistryServices,
@@ -5103,7 +5104,11 @@ export function NewChatLandingScreen() {
     pickerSelectionError === null &&
     sandboxCatalogError === null &&
     selectedAgent != null &&
-    !(selectedAgent.workflow_kind === "egm-template" && sandboxSelected) &&
+    !(
+      selectedAgent.workflow_kind === "egm-template" &&
+      sandboxSelected &&
+      (!cloudDesignReviewEnabled || sandboxRepoSelections.length !== 1)
+    ) &&
     (sandboxSelected ? sandboxRepoValid : selectedHost?.status === "online" && workspaceValid) &&
     !creating;
 
@@ -5112,33 +5117,37 @@ export function NewChatLandingScreen() {
   // tooltip always names the next missing input. Null when nothing is
   // actionable (submitting, or mid-create).
   const submitDisabledReason =
-    selectedAgent?.workflow_kind === "egm-template" && sandboxSelected
+    selectedAgent?.workflow_kind === "egm-template" && sandboxSelected && !cloudDesignReviewEnabled
       ? "Design review requires a connected host, not a managed sandbox"
-      : canSubmit
-        ? null
-        : mcpAuthorizing || mcpSelectionError
-          ? (mcpSelectionError ?? "Finish signing in to the MCP service…")
-          : pendingSkillCompletion
-            ? "Loading skills…"
-            : pickerLoading || workspaceStartLoading || worktreeRequestPending
-              ? "Loading session configuration…"
-              : pickerSelectionError || sandboxCatalogError
-                ? (pickerSelectionError ?? sandboxCatalogError)
-                : sandboxSelected && sandboxRepoOverCap
-                  ? `This sandbox provider clones at most ${maxSandboxRepos} ${
-                      maxSandboxRepos === 1 ? "repository" : "repositories"
-                    } — remove the extras`
-                  : sandboxSelected && !sandboxRepoValid
-                    ? "Please enter a valid repository URL"
-                    : !sandboxSelected && selectedHostId && selectedHost?.status !== "online"
-                      ? "Selected host is unavailable. Reconnect it or choose another host."
-                      : !sandboxSelected && (!selectedHostId || !workspaceValid)
-                        ? "Please choose a host and working directory"
-                        : configuredAgentUnavailable && selectedAgent == null
-                          ? "This project's configured agent is unavailable — pick an agent to continue"
-                          : message.trim().length === 0 && files.length === 0
-                            ? "Enter a message to get started"
-                            : null;
+      : selectedAgent?.workflow_kind === "egm-template" &&
+          sandboxSelected &&
+          sandboxRepoSelections.length !== 1
+        ? "Cloud Design review reviews exactly one repository"
+        : canSubmit
+          ? null
+          : mcpAuthorizing || mcpSelectionError
+            ? (mcpSelectionError ?? "Finish signing in to the MCP service…")
+            : pendingSkillCompletion
+              ? "Loading skills…"
+              : pickerLoading || workspaceStartLoading || worktreeRequestPending
+                ? "Loading session configuration…"
+                : pickerSelectionError || sandboxCatalogError
+                  ? (pickerSelectionError ?? sandboxCatalogError)
+                  : sandboxSelected && sandboxRepoOverCap
+                    ? `This sandbox provider clones at most ${maxSandboxRepos} ${
+                        maxSandboxRepos === 1 ? "repository" : "repositories"
+                      } — remove the extras`
+                    : sandboxSelected && !sandboxRepoValid
+                      ? "Please enter a valid repository URL"
+                      : !sandboxSelected && selectedHostId && selectedHost?.status !== "online"
+                        ? "Selected host is unavailable. Reconnect it or choose another host."
+                        : !sandboxSelected && (!selectedHostId || !workspaceValid)
+                          ? "Please choose a host and working directory"
+                          : configuredAgentUnavailable && selectedAgent == null
+                            ? "This project's configured agent is unavailable — pick an agent to continue"
+                            : message.trim().length === 0 && files.length === 0
+                              ? "Enter a message to get started"
+                              : null;
 
   // Names the picked provider, else the server's default label.
   const selectedSandboxLabel =
@@ -6739,8 +6748,12 @@ export function NewChatLandingScreen() {
           >
             {selectedAgent?.workflow_kind === "egm-template" && (
               <p role="note" className="px-4 py-2 text-sm text-muted-foreground">
-                Choose a connected, authenticated host and a repository containing docs/designs/egm.
-                Review output is saved there; reviewers have read-only access.
+                {sandboxSelected && cloudDesignReviewEnabled
+                  ? "Runs in a WakeVane cloud workspace pinned to the branch's current commit. " +
+                    "It keeps running if you close this tab, and review results are saved to " +
+                    "your account. Public repositories only for now."
+                  : "Choose a connected, authenticated host and a repository containing " +
+                    "docs/designs/egm. Review output is saved there; reviewers have read-only access."}
               </p>
             )}
             <ChatComposer

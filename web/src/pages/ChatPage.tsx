@@ -1,5 +1,6 @@
 import { SelectionPopup } from "@/components/chat/SelectionPopup";
 import { useLoadedConversations } from "@/hooks/useSidebarData";
+import { DesignReviewOutputs } from "@/components/chat/DesignReviewOutputs";
 import { useConversationRedirect } from "@/hooks/useConversationRedirect";
 import { MAIN_CANVAS_ID } from "@/canvas/canvasLayout";
 import { CANVAS_QUERY_PARAM, canvasLocation, isCanvasPathname } from "@/canvas/canvasNavigation";
@@ -1202,7 +1203,16 @@ export function ChatPage() {
 
   return (
     <SessionSharedContext.Provider value={isSessionShared}>
-      <SessionLayout mainAgent={mainAgent} />
+      <SessionLayout
+        mainAgent={mainAgent}
+        banner={
+          urlConvId &&
+          (activeSession?.labels?.["omnigent.egm.cloud"] ??
+            activeConv?.labels?.["omnigent.egm.cloud"]) === "true" ? (
+            <DesignReviewOutputs sessionId={urlConvId} />
+          ) : null
+        }
+      />
       <ReconnectSessionDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}
@@ -1246,6 +1256,8 @@ export function ChatPage() {
 
 interface SessionLayoutProps {
   mainAgent: React.ReactNode;
+  /** Optional strip above the conversation, e.g. a cloud review's saved results. */
+  banner?: React.ReactNode;
 }
 
 /**
@@ -1257,13 +1269,14 @@ interface SessionLayoutProps {
  * tab inside the right Workspace rail (WorkspacePanel), so it never floats as a
  * mid-page column.
  */
-function SessionLayout({ mainAgent }: SessionLayoutProps) {
+function SessionLayout({ mainAgent, banner }: SessionLayoutProps) {
   return (
     <div className="flex min-h-0 flex-1 overflow-hidden">
       {/* `relative`: positions MainAgentSurface's persistent terminal overlay
           and the composer's file-drop overlay (both absolute inset-0) against
           the main column. */}
       <div data-chat-surface className="relative flex min-w-0 flex-1 flex-col">
+        {banner}
         {mainAgent}
       </div>
     </div>
