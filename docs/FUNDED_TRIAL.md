@@ -1,8 +1,9 @@
 # Private funded trial
 
 Status: grants, ledger, metered gateway and launch admission are implemented
-and tested locally but **not deployed or enabled**. Cloud token injection,
-compute settlement, durable outputs and the design-to-PR flow remain. See
+and tested locally but **not deployed or enabled**. The approved coding and
+pull request stage is implemented locally behind `egm_cloud_coding`; live
+verification remains. See
 [Implementation status](#implementation-status) and the
 [cloud delivery plan](BROWSER_ONLY_DESIGN_REVIEW.md).
 
@@ -171,8 +172,76 @@ sandbox down and the launch fails. Code: `omnigent/server/egm_cloud.py`, the
 `prepare_workspace` hook in `managed_hosts.py`. Tests: `tests/server/test_egm_cloud.py`,
 `tests/server/test_managed_hosts.py`.
 
+### Approved coding and pull request stage (implemented, local)
+
+Behind the `egm_cloud_coding` feature (default off, frontend-visible, review by
+0.26.0). Code: `omnigent/server/egm_coding.py`,
+`omnigent/server/routes/design_review_coding.py`. Tests:
+`tests/server/test_egm_coding.py`, `web/src/components/chat/DesignReviewOutputs.test.tsx`.
+
+- **Approval.** The review root's owner approves one saved Markdown spec by
+  path and SHA-256 from the latest durable manifest; the manifest must belong to
+  the pinned commit, and an optional `commit` in the request must match it. Hash,
+  commit or path mismatches, non-cloud sessions, non-owners (403 with some
+  access, 404 without) and a disabled flag are rejected before anything is
+  recorded. The record (approver, time, spec path/hash/size, repository, source
+  commit, base branch, coding branch, manifest checkpoint, funding mode) is
+  stored in the artifact store under `egm-approvals/<review>/<approval>/`. The
+  approval id is derived from review, path, hash and commit, so a repeat returns
+  the existing approval and coding session.
+- **Coding session.** Approval creates a new root session through the same JSON
+  create flow as `POST /v1/sessions` (shared via `app.state.create_json_session`),
+  so ownership grants, `require_launch_eligibility`, managed launch and durable
+  first input are identical. Default agent: the Claude native coding agent
+  (`agent_id` may name another non-EGM agent). The workspace is the review's
+  repository; the launch's `prepare_workspace` hook checks out the pinned commit
+  on `wakevane/design-<approval id prefix>` on every generation. Server-owned
+  `omnigent.egm.coding.*` labels bind the session to its approval; clients cannot
+  set or patch them, and forks drop them. The verified spec bytes are embedded in
+  the first message. EGM sandboxes, the confinement probe and reviewer grants are
+  unchanged.
+- **Funding.** On a `funding: trial` target, create-time eligibility and every
+  launch/relaunch/wake admission also require the grant's `coding` capability.
+  The compute hold is attributed to the review's root, so design and coding count
+  as one funded workflow. A denial creates no sandbox and never falls back.
+- **Evidence.** The compute meter's output publisher also checkpoints coding
+  sessions: changed regular files (with modes), deletions, a binary patch against
+  the pinned commit and the agent's `.git/wakevane/test-output.txt`, using a
+  throwaway git index that honors `.gitignore`. Symlinks, submodules and oversize
+  changes block the export. Blobs and a manifest are stored under the approval.
+  Test output is written by the agent, not executed by the server.
+- **Pull request.** A separate owner action builds a commit from the stored bytes
+  with the GitHub Git data API (parent: the pinned commit; fixed dates, so a
+  retry reproduces the same SHA), creates the coding branch and opens a pull
+  request against the review's branch (or the default branch) with the owner's
+  GitHub connection. Trial-funded approvals also need `pull_request`. Missing
+  GitHub connection or write access fails with an explicit message. A recorded
+  pull request is returned on repeat. The client exposes no merge endpoint and
+  nothing deploys.
+- **Web.** The cloud review's saved-results strip offers **Approve for coding**
+  on Markdown files (owner, flag on), links the coding session, shows stored
+  change and test evidence, and offers **Open pull request**.
+
+Routes (all under `/v1`):
+
+- `POST /sessions/{id}/design-review/approve` — body
+  `{"path", "sha256", "commit"?, "agent_id"?, "sandbox_provider"?}`; owner only.
+- `GET /sessions/{id}/design-review/approvals` — approvals with their latest
+  coding outputs manifest; read access.
+- `GET /sessions/{id}/design-review/approvals/{approval}/patch|test-output` —
+  stored evidence; read access.
+- `POST /sessions/{id}/design-review/approvals/{approval}/pull-request` — owner
+  only.
+
+Open decisions: the coding agent's permission mode (it starts with the agent's
+own defaults, so tool approvals may wait for the owner); whether later coding
+changes should update an already-opened pull request (today the first PR is
+kept); approval idempotency is serialized per replica only (the artifact store
+has no compare-and-set); managed sandboxes may still receive the owner's GitHub
+credential through the existing broker, independent of this stage.
+
 ### Not yet implemented
 
-1. Storage charges, durable output publication, private-repository commit
-   resolution (GitHub App), the approved coding/PR stage, and browser UI.
+1. Storage charges, private-repository commit resolution (GitHub App) and the
+   remaining browser onboarding.
 2. Real-provider (Modal) pilot and the live verification list above.

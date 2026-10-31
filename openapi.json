@@ -1888,6 +1888,62 @@
         "title": "DailyCost",
         "type": "object"
       },
+      "DesignApprovalRequest": {
+        "description": "The saved specification the owner approves for implementation.",
+        "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "commit": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{40}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit"
+          },
+          "path": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          },
+          "sandbox_provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sandbox Provider"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "sha256"
+        ],
+        "title": "DesignApprovalRequest",
+        "type": "object"
+      },
       "EfficiencyReport": {
         "description": "The efficiency scorecard for `GET /v1/usage/efficiency`.\n\nWhere `UsageReport` says what the caller spent, this says *why*:\ncache hit rate, output share and model mix, each derived from the token\ncounters already recorded per session (`designs/HARNESS_FLYWHEEL.md`\nsection 4).\n\nThe window follows the same UTC calendar-day semantics as\n`cost_last_30d`: today plus the `window_days - 1` prior days. A\nsession is in the window when its last activity falls inside it, and\nits **whole** cumulative usage is counted (session usage is cumulative,\nnot per-day), so the totals here are not expected to tie out to the\ndaily-rollup summary in `UsageReport`.\n\n`totals`, `by_harness` and `by_model` are computed over every\nsession in the window; `sessions` is the same set sorted by\n`cost_usd` descending and truncated to the requested `limit`, so the\nworst offenders are on top.",
         "properties": {
@@ -15188,6 +15244,223 @@
         "summary": "Update Comment",
         "tags": [
           "comments"
+        ]
+      }
+    },
+    "/v1/sessions/{session_id}/design-review/approvals": {
+      "get": {
+        "description": "Approvals for a review, each with its latest stored coding outputs.",
+        "operationId": "get_approvals_v1_sessions__session_id__design_review_approvals_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Approvals V1 Sessions  Session Id  Design Review Approvals Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Approvals",
+        "tags": [
+          "design review"
+        ]
+      }
+    },
+    "/v1/sessions/{session_id}/design-review/approvals/{approval_id}/pull-request": {
+      "post": {
+        "description": "Push the stored coding changes to a new branch and open a pull request.\n\nUses the owner's GitHub connection. Never merges or deploys.",
+        "operationId": "open_design_pull_request_v1_sessions__session_id__design_review_approvals__approval_id__pull_request_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "approval_id",
+            "required": true,
+            "schema": {
+              "title": "Approval Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Open Design Pull Request V1 Sessions  Session Id  Design Review Approvals  Approval Id  Pull Request Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Open Design Pull Request",
+        "tags": [
+          "design review"
+        ]
+      }
+    },
+    "/v1/sessions/{session_id}/design-review/approvals/{approval_id}/{kind}": {
+      "get": {
+        "description": "Download the stored patch or test output of an approval's coding session.",
+        "operationId": "get_coding_evidence_v1_sessions__session_id__design_review_approvals__approval_id___kind__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "approval_id",
+            "required": true,
+            "schema": {
+              "title": "Approval Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "enum": [
+                "patch",
+                "test-output"
+              ],
+              "title": "Kind",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Coding Evidence",
+        "tags": [
+          "design review"
+        ]
+      }
+    },
+    "/v1/sessions/{session_id}/design-review/approve": {
+      "post": {
+        "description": "Approve one saved specification and start its separate coding session.\n\nIdempotent per review, spec path, hash and commit: a repeat returns the\nexisting approval and its coding session instead of starting another.",
+        "operationId": "approve_design_v1_sessions__session_id__design_review_approve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DesignApprovalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Approve Design V1 Sessions  Session Id  Design Review Approve Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Approve Design",
+        "tags": [
+          "design review"
         ]
       }
     },

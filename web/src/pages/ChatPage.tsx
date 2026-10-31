@@ -251,7 +251,7 @@ import {
   nativeModelTooltip,
 } from "@/lib/composerModelLabel";
 import { useServerInfo } from "@/lib/CapabilitiesContext";
-import type { ServerInfo } from "@/lib/capabilities";
+import { type ServerInfo, isFeatureEnabled } from "@/lib/capabilities";
 import { MainTerminalView } from "@/shell/MainTerminalView";
 import { UNTITLED_CONVERSATION_LABEL } from "@/shell/sidebarNav";
 import { ComposerAgentIcon, NewChatLandingScreen } from "@/shell/NewChatDialog";
@@ -1209,7 +1209,11 @@ export function ChatPage() {
           urlConvId &&
           (activeSession?.labels?.["omnigent.egm.cloud"] ??
             activeConv?.labels?.["omnigent.egm.cloud"]) === "true" ? (
-            <DesignReviewOutputs sessionId={urlConvId} />
+            <DesignReviewOutputs
+              sessionId={urlConvId}
+              codingEnabled={isFeatureEnabled(serverInfo, "egm_cloud_coding")}
+              isOwner={isOwnerLevel(permissionLevel)}
+            />
           ) : null
         }
       />
