@@ -20,6 +20,9 @@ from omnigent.server.routes._session_create_validation import validate_session_a
 from omnigent.server.schemas import SessionCreateRequest
 from omnigent.stores.permission_store.sqlalchemy_store import SqlAlchemyPermissionStore
 from tests.server.routes.test_workspace_validation import host_setup as host_setup
+from tests.stores.conftest import agent_store as agent_store
+from tests.stores.conftest import artifact_store as artifact_store
+from tests.stores.conftest import conversation_store as conversation_store
 
 
 @pytest.mark.asyncio

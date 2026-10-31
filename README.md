@@ -99,6 +99,9 @@ is in [`designs/HARNESS_FLYWHEEL.md`](designs/HARNESS_FLYWHEEL.md).
 - **Design review.** [`examples/egm`](examples/egm) adds an opt-in
   Elephant-Goldfish workflow: versioned specifications, fresh independent
   reviews, bounded revisions and an implementation handoff for human approval.
+  Start with the [beta user guide](docs/DESIGN_REVIEW.md). It currently requires a
+  connected computer; [browser-only cloud execution](docs/BROWSER_ONLY_DESIGN_REVIEW.md)
+  is planned.
 
 
 ### Install WakeVane

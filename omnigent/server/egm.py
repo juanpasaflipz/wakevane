@@ -94,9 +94,18 @@ def snapshot_agent(store, artifacts, agent, owner):
 
 
 async def validate_egm_output(
-    host_registry, host_id: str | None, workspace: str | None, host_store=None
+    host_registry,
+    host_id: str | None,
+    workspace: str | None,
+    host_store=None,
+    *,
+    cloud_review: bool = False,
 ) -> None:
-    """Check the pre-existing review directory on the chosen connected host."""
+    """Check the pre-existing review directory on the chosen connected host.
+
+    :param cloud_review: The session continues a cloud review, whose managed
+        sandbox host was prepared and confinement-checked at launch.
+    """
     from omnigent.server.routes._workspace_validation import (
         WorkspaceValidationError,
         _ask_host_stat,
@@ -108,9 +117,12 @@ async def validate_egm_output(
         import asyncio
 
         host = await asyncio.to_thread(host_store.get_host, host_id)
-        if host is None or host.sandbox_provider is not None:
+        if host is None or (host.sandbox_provider is not None) != cloud_review:
             raise OmnigentError(
-                "Design review requires an external connected host", code=ErrorCode.INVALID_INPUT
+                "Design review requires an external connected host"
+                if not cloud_review
+                else "Cloud Design review continues only on its own cloud workspace",
+                code=ErrorCode.INVALID_INPUT,
             )
     connection = host_registry.get(host_id) if host_registry else None
     if connection is None:

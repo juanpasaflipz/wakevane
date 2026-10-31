@@ -2849,6 +2849,52 @@ async def test_launch_host_start_failure_terminates_and_deletes_host(db_uri: str
     assert host_store.list_hosts(_OWNER) == []
 
 
+async def test_launch_runs_workspace_preparer_and_tears_down_when_it_fails(db_uri: str) -> None:
+    """
+    The preparer sees the online host's sandbox and workspace before any runner,
+    and its failure cleans up like a failed host start.
+    """
+    from omnigent.server.egm_cloud import prepare_cloud_review
+
+    host_store = HostStore(db_uri)
+
+    def _register(invocation: HostStartInvocation) -> None:
+        host_store.upsert_on_connect(
+            host_id=invocation.host_id, name=invocation.host_name, user_id=_OWNER
+        )
+
+    prepared: list[tuple[str, str]] = []
+    fake = FakeSandboxLauncher(on_host_start=_register)
+    result = await launch_managed_host(
+        config=_injected_config(fake),
+        owner=_OWNER,
+        host_store=host_store,
+        repos=[parse_repo_workspace("https://github.com/org/myrepo.git")],
+        prepare_workspace=lambda launcher, sandbox_id, workspace: prepared.append(
+            (sandbox_id, workspace)
+        ),
+    )
+    assert prepared == [("sb-fake-1", result.workspace)]
+    assert fake.terminated == []
+
+    # The fake sandbox reports no probe result, so confinement is unproven.
+    failing = FakeSandboxLauncher(on_host_start=_register)
+    with pytest.raises(HTTPException) as exc:
+        await launch_managed_host(
+            config=_injected_config(failing),
+            owner=_OWNER,
+            host_store=host_store,
+            prepare_workspace=lambda launcher, sandbox_id, workspace: prepare_cloud_review(
+                launcher, sandbox_id, workspace, "a" * 40
+            ),
+        )
+    assert exc.value.status_code == 502
+    assert "could not verify its sandbox" in exc.value.detail
+    assert any("checkout --quiet --detach " + "a" * 40 in c for c in failing.commands)
+    assert failing.terminated == ["sb-fake-1"]
+    assert [host.host_id for host in host_store.list_hosts(_OWNER)] == [result.host_id]
+
+
 async def test_launch_non_click_exception_terminates_and_deletes_host(db_uri: str) -> None:
     """
     A raw (non-Click, non-HTTP) exception during host start — a

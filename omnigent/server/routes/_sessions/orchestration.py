@@ -17,7 +17,7 @@ import secrets
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import httpx
 from fastapi import (
@@ -27,8 +27,14 @@ from fastapi import (
 from fastapi.responses import Response
 from pydantic import ValidationError
 
+if TYPE_CHECKING:
+    from omnigent.onboarding.sandboxes import SandboxHostLauncher
+    from omnigent.server.funded_trial import TrialLaunch
+    from omnigent.server.funded_trial_store import TrialCharge
+    from omnigent.server.managed_hosts import WorkspacePreparer
+
 from omnigent.cli_invocation import cli_invocation
-from omnigent.db.utils import generate_agent_id, generate_task_id
+from omnigent.db.utils import generate_agent_id, generate_task_id, now_epoch
 from omnigent.db.workspace_cache import WorkspaceScopedCache
 from omnigent.debug_logging import debug_event, runner_log_scope
 from omnigent.entities import (
@@ -4409,6 +4415,19 @@ async def _run_managed_launch(
             saved_conversation.inference_snapshot,
         )
 
+    admitted = await _admit_funded_launch(
+        sandbox_config=sandbox_config,
+        provider=relaunch_host.sandbox_provider if relaunch_host is not None else provider,
+        owner=owner,
+        session_id=session_id,
+        conversation=saved_conversation,
+        phase="relaunch" if relaunch_host is not None else "launch",
+        tracker=tracker,
+    )
+    if admitted is None:
+        return
+    sandbox_config = admitted.deployment
+
     agent_name: str | None = None
     if agent_store is not None and agent_id is not None:
         agent_name = await asyncio.to_thread(
@@ -4434,9 +4453,23 @@ async def _run_managed_launch(
                 and saved_conversation is not None
                 and host_slice_key_enabled(saved_conversation.labels, relaunch_host.host_id)
             ),
+            prepare_workspace=_cloud_review_preparer(saved_conversation),
         )
         if managed is None:
+            await asyncio.to_thread(
+                _settle_unlaunched_compute,
+                sandbox_config,
+                admitted.charge,
+                relaunch_host.sandbox_provider if relaunch_host is not None else provider,
+            )
             return
+        await asyncio.to_thread(
+            _record_managed_generation,
+            sandbox_config,
+            owner=owner,
+            host_id=managed.host_id,
+            charge=admitted.charge,
+        )
         await _bind_and_launch_managed_runner(
             session_id=session_id,
             managed=managed,
@@ -4448,6 +4481,130 @@ async def _run_managed_launch(
             tunnel_registry=tunnel_registry,
             relaunch_host=relaunch_host,
         )
+
+
+async def _admit_funded_launch(
+    *,
+    sandbox_config: ManagedSandboxDeployment,
+    provider: str | None,
+    owner: str,
+    session_id: str,
+    conversation: Conversation | None,
+    phase: str,
+    tracker: ManagedLaunchTracker,
+) -> TrialLaunch | None:
+    """Reserve trial compute and arm the gateway credential before provisioning.
+
+    Returns the deployment to launch with: unchanged for operator-funded
+    targets, carrying a minted gateway token and its compute hold for trial
+    targets. Returns ``None`` after settling the launch as failed on denial;
+    a denial creates no sandbox and never retries on another payer.
+    """
+    from omnigent.server.funded_trial import (
+        TrialLaunch,
+        has_trial_targets,
+        prepare_trial_launch,
+    )
+    from omnigent.server.funded_trial_store import FundedTrialDenied
+
+    if not has_trial_targets(sandbox_config):
+        return TrialLaunch(sandbox_config)
+    root_session_id = (
+        conversation.root_conversation_id
+        if conversation is not None and conversation.root_conversation_id
+        else session_id
+    )
+    try:
+        return await asyncio.to_thread(
+            prepare_trial_launch,
+            sandbox_config,
+            provider=provider,
+            owner=owner,
+            session_id=session_id,
+            root_session_id=root_session_id,
+            phase=phase,
+            launch_id=uuid.uuid4().hex,
+        )
+    except FundedTrialDenied as denied:
+        _logger.info(
+            "Funded trial denied managed %s for session %s: %s",
+            phase,
+            session_id,
+            denied.reason,
+            extra={"session_id": session_id},
+        )
+        tracker.fail(session_id, denied.message)
+        _publish_sandbox_status(session_id, "failed", denied.message)
+        return None
+
+
+def _cloud_review_preparer(
+    conversation: Conversation | None,
+) -> WorkspacePreparer | None:
+    """Pin and confinement-check a cloud Design review's sandbox, else ``None``.
+
+    Runs on every new generation, since a relaunch re-clones the branch tip.
+    """
+    from omnigent.server.egm_cloud import pinned_commit, prepare_cloud_review
+
+    commit = pinned_commit(conversation.labels) if conversation is not None else None
+    if commit is None:
+        return None
+
+    def _prepare(launcher: SandboxHostLauncher, sandbox_id: str, workspace: str) -> None:
+        prepare_cloud_review(launcher, sandbox_id, workspace, commit)
+
+    return _prepare
+
+
+def _record_managed_generation(
+    sandbox_config: ManagedSandboxDeployment,
+    *,
+    owner: str,
+    host_id: str,
+    charge: TrialCharge | None,
+) -> None:
+    """Start metering the host's new generation; its end settles *charge*.
+
+    A hold the meter will not settle (no meter, or the generation was already
+    metered under an earlier hold) is released so it cannot strand allowance.
+    """
+    meter = getattr(sandbox_config, "compute_meter", None)
+    usage = None
+    try:
+        if meter is not None:
+            usage = meter.record_start(
+                owner=owner, host_id=host_id, trial_charge_id=charge.id if charge else None
+            )
+    except Exception:  # noqa: BLE001 - metering must never fail a launch that succeeded
+        _logger.exception("Could not start metering managed host %s", host_id)
+    if usage is None or charge is None or usage.trial_charge_id != charge.id:
+        _release_unused_compute(sandbox_config, charge)
+
+
+def _release_unused_compute(
+    sandbox_config: ManagedSandboxDeployment, charge: TrialCharge | None
+) -> None:
+    """Free a hold whose launch never produced a metered generation."""
+    policy = getattr(sandbox_config, "funded_trial", None)
+    if charge is not None and policy is not None and policy.store is not None:
+        policy.store.release(charge.id)
+
+
+def _settle_unlaunched_compute(
+    sandbox_config: ManagedSandboxDeployment,
+    charge: TrialCharge | None,
+    provider: str | None,
+) -> None:
+    """Charge a failed launch's hold for the time provisioning ran, then free it."""
+    policy = getattr(sandbox_config, "funded_trial", None)
+    if charge is None or policy is None:
+        return
+    policy.settle_compute(
+        charge.id,
+        provider=sandbox_config.recorded(provider).provider,
+        seconds=max(0, now_epoch() - charge.created_at),
+    )
 
 
 async def _bind_and_launch_managed_runner(
@@ -5492,6 +5649,29 @@ async def _run_managed_wake(
         tracker.fail(session_id, reason)
         _publish_sandbox_status(session_id, "failed", reason)
         return
+    from omnigent.server.funded_trial import has_trial_targets
+
+    wake_charge: TrialCharge | None = None
+    if has_trial_targets(sandbox_config):
+        woken_host = await asyncio.to_thread(host_store.get_host, host_id)
+        if woken_host is None:
+            reason = "managed host not found"
+            tracker.fail(session_id, reason)
+            _publish_sandbox_status(session_id, "failed", reason)
+            return
+        admitted = await _admit_funded_launch(
+            sandbox_config=sandbox_config,
+            provider=woken_host.sandbox_provider,
+            owner=woken_host.user_id,
+            session_id=session_id,
+            conversation=conv,
+            phase="wake",
+            tracker=tracker,
+        )
+        if admitted is None:
+            return
+        sandbox_config = admitted.deployment
+        wake_charge = admitted.charge
 
     def _on_stage(stage: str, details: str | None = None) -> None:
         """Relay the wake's launch-pipeline stage to the session's progress surface.
@@ -5545,6 +5725,9 @@ async def _run_managed_wake(
                 session_id,
                 extra={"session_id": session_id},
             )
+            # The relaunch below reserves its own compute.
+            await asyncio.to_thread(_release_unused_compute, sandbox_config, wake_charge)
+            wake_charge = None
             host = await asyncio.to_thread(host_store.get_host, host_id)
             if host is None:
                 reason = "managed host not found after sandbox loss"
@@ -5566,6 +5749,17 @@ async def _run_managed_wake(
                 agent_id=agent_id,
             )
             return
+        if wake_charge is not None or getattr(sandbox_config, "compute_meter", None) is not None:
+            woken = await asyncio.to_thread(host_store.get_host, host_id)
+            if woken is not None:
+                await asyncio.to_thread(
+                    _record_managed_generation,
+                    sandbox_config,
+                    owner=woken.user_id,
+                    host_id=host_id,
+                    charge=wake_charge,
+                )
+                wake_charge = None
         _publish_sandbox_status(session_id, "connecting")
         refreshed = await asyncio.to_thread(conversation_store.get_conversation, session_id)
         if refreshed is None:
@@ -5656,6 +5850,9 @@ async def _run_managed_wake(
         )
         tracker.fail(session_id, "internal error during managed host wake")
         _publish_sandbox_status(session_id, "failed", "internal error during managed host wake")
+    finally:
+        if wake_charge is not None:
+            await asyncio.to_thread(_release_unused_compute, sandbox_config, wake_charge)
 
 
 async def _ensure_runner_session_initialized(
@@ -11237,21 +11434,41 @@ async def _create_session_from_existing_agent(
         egm_continuation=bool(body.parent_session_id),
     )
 
+    egm_cloud_target = None
+    egm_cloud_review = False
+    egm_cloud_parent = None
     if agent.managed_by in {"egm-template", "egm-session"}:
         from omnigent.server.egm import (
             reject_egm_overrides,
             require_egm_target,
             validate_continuation,
         )
+        from omnigent.server.egm_cloud import pinned_commit, resolve_cloud_target
+        from omnigent.server.feature_flags import Feature
 
         reject_egm_overrides(body)
         if agent.managed_by == "egm-session":
             body = await validate_continuation(
                 agent, body, request, user_id, permission_store, conversation_store, artifact_store
             )
+            egm_cloud_parent = await asyncio.to_thread(
+                conversation_store.get_conversation, body.parent_session_id
+            )
+            egm_cloud_review = bool(
+                egm_cloud_parent is not None and pinned_commit(egm_cloud_parent.labels)
+            )
         elif body.parent_session_id or body.sub_agent_name:
             raise OmnigentError("Start Design review as a new root", code=ErrorCode.INVALID_INPUT)
-        require_egm_target(body.host_id, body.workspace, body.host_type)
+        if (
+            body.host_type == "managed"
+            and agent.managed_by == "egm-template"
+            and request.app.state.feature_flags.enabled(Feature.EGM_CLOUD)
+        ):
+            # Pinned before anything persists, so a moving branch cannot change the review.
+            egm_cloud_target = await resolve_cloud_target(body.workspace)
+            egm_cloud_review = True
+        else:
+            require_egm_target(body.host_id, body.workspace, body.host_type)
 
     # Top-level Smart Routing: "auto" on a native wrapper agent means the client
     # picked Smart Routing with no bundle agent, and its ``agent_id`` is only a
@@ -11487,6 +11704,20 @@ async def _create_session_from_existing_agent(
             _validated_harness_override, body.harness_override, agent
         )
 
+    if body.host_type == "managed":
+        from omnigent.server.funded_trial import require_launch_eligibility
+        from omnigent.server.funded_trial_store import FundedTrialDenied
+
+        try:
+            await asyncio.to_thread(
+                require_launch_eligibility,
+                getattr(request.app.state, "sandbox_config", None),
+                body.sandbox_provider,
+                user_id,
+            )
+        except FundedTrialDenied as denied:
+            raise OmnigentError(denied.message, code=ErrorCode.FORBIDDEN) from None
+
     inference_snapshot = None
     selection_spec = None
     from omnigent.server.mcp_compatibility import registry_services, require_registry_mcp_runtime
@@ -11604,7 +11835,7 @@ async def _create_session_from_existing_agent(
             request=request,
         )
 
-    if agent.managed_by in {"egm-template", "egm-session"}:
+    if agent.managed_by in {"egm-template", "egm-session"} and egm_cloud_target is None:
         from omnigent.server.egm import validate_egm_output
 
         await validate_egm_output(
@@ -11612,6 +11843,7 @@ async def _create_session_from_existing_agent(
             body.host_id,
             canonical_workspace,
             getattr(request.app.state, "host_store", None),
+            cloud_review=egm_cloud_review,
         )
 
     from omnigent.server.routes._session_harness_readiness import (
@@ -11778,6 +12010,17 @@ async def _create_session_from_existing_agent(
         initial_labels["omnigent.egm.snapshot"] = "true"
         initial_labels["omnigent.egm.source_digest"] = agent.bundle_location.rsplit("/", 1)[-1]
         initial_labels["omnigent.egm.source_version"] = str(agent.version)
+        if egm_cloud_target is not None:
+            from omnigent.server.egm_cloud import cloud_review_labels
+
+            initial_labels.update(cloud_review_labels(egm_cloud_target))
+        elif egm_cloud_review and egm_cloud_parent is not None:
+            # Reviewers stay pinned to the root's commit.
+            from omnigent.server.egm_cloud import CLOUD_LABEL, COMMIT_LABEL, REPOSITORY_LABEL
+
+            for key in (CLOUD_LABEL, COMMIT_LABEL, REPOSITORY_LABEL):
+                if key in egm_cloud_parent.labels:
+                    initial_labels[key] = egm_cloud_parent.labels[key]
     initial_labels.update(registry_labels)
     if created_worktree_path is not None:
         from omnigent.server.routes._host_worktree import (

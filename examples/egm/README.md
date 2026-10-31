@@ -12,6 +12,10 @@ versioned implementation handoff for a human to approve.
 
 ## Try it
 
+For the hosted web flow, start with the [beta user guide](../../docs/DESIGN_REVIEW.md).
+The [browser-only delivery plan](../../docs/BROWSER_ONLY_DESIGN_REVIEW.md) describes
+proposed cloud support; it is not available through this bundle today.
+
 Use a WakeVane source checkout, a configured Claude provider (`omnigent setup`),
 and the usual running server/host needed for worker sessions. Select the target
 repository as the web session workspace (the folder picker above the composer),

@@ -36,6 +36,8 @@ class Feature(StrEnum):
     SHIMS_PAGE = "shims_page"
     SUBSCRIPTIONS_PAGE = "subscriptions_page"
     EGM_TEMPLATE = "egm_template"
+    FUNDED_TRIAL = "funded_trial"
+    EGM_CLOUD = "egm_cloud"
 
 
 @dataclass(frozen=True)
@@ -155,6 +157,22 @@ FEATURE_DEFINITIONS: tuple[FeatureDefinition, ...] = (
         description="Packaged Design review workflow in New Chat",
         owner="server",
         review_by_release="0.24.0",
+    ),
+    FeatureDefinition(
+        feature=Feature.EGM_CLOUD,
+        description="Design review in a managed cloud sandbox pinned to an exact commit",
+        owner="server",
+        review_by_release="0.26.0",
+    ),
+    FeatureDefinition(
+        feature=Feature.FUNDED_TRIAL,
+        description=(
+            "Global kill switch for service-funded trial grants; grants still apply per account"
+        ),
+        owner="server",
+        review_by_release="0.26.0",
+        # Clients read effective capabilities from the trial route, never this flag.
+        frontend_visible=False,
     ),
     FeatureDefinition(
         feature=Feature.SUBSCRIPTIONS_PAGE,

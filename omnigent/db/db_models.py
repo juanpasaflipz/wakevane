@@ -564,6 +564,174 @@ class SqlDeviceGrant(OmnigentBase):
     )
 
 
+class SqlFundedTrialGrant(OmnigentBase):
+    """One account's service-funded trial grant and its shared allowance.
+
+    Amounts are integer micro-USD so reservation arithmetic is exact. The
+    allowance is shared by every session tree the account launches; a
+    conditional ``UPDATE`` on this row is the atomic admission point.
+
+    :param user_id: Stable server user id the grant is bound to.
+    :param capabilities: Comma-separated granted capabilities.
+    :param allowance_micros: Total spend allowed over the grant's life.
+    :param reserved_micros: Sum of open (unsettled) reservations.
+    :param spent_micros: Sum of settled charges; may exceed the allowance
+        only when a provider reports more than was reserved.
+    :param max_concurrent_roots: Root workflows that may hold open reservations.
+    :param generation: Term revision; gateway tokens from older revisions are rejected.
+    :param expires_at: Unix epoch seconds after which nothing new may spend.
+    :param revoked_at: Unix epoch seconds of revocation, ``NULL`` while active.
+    """
+
+    __tablename__ = "funded_trial_grants"
+
+    workspace_id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        nullable=False,
+        server_default="0",
+        default=current_workspace_id,
+    )
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    capabilities: Mapped[str] = mapped_column(String(256), nullable=False)
+    allowance_micros: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    reserved_micros: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    spent_micros: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    max_concurrent_roots: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Bumped on every revocation or change of terms; invalidates older gateway tokens.
+    generation: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    expires_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    revoked_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("allowance_micros >= 0", name="ck_funded_trial_grants_allowance"),
+        CheckConstraint("reserved_micros >= 0", name="ck_funded_trial_grants_reserved"),
+        UniqueConstraint("workspace_id", "user_id", name="uq_funded_trial_grants_user"),
+    )
+
+
+class SqlFundedTrialCharge(OmnigentBase):
+    """A reservation against a trial grant and its idempotent settlement.
+
+    :param idempotency_key: Caller-chosen key; replaying it returns the
+        original charge instead of reserving again.
+    :param kind: ``inference``, ``compute`` or ``storage``.
+    :param status: ``reserved``, ``settled`` or ``released``.
+    :param root_session_id: Session tree the charge belongs to.
+    """
+
+    __tablename__ = "funded_trial_charges"
+
+    workspace_id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        nullable=False,
+        server_default="0",
+        default=current_workspace_id,
+    )
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    grant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    root_session_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    session_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    reserved_micros: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    settled_micros: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    settled_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('inference', 'compute', 'storage')", name="ck_funded_trial_charges_kind"
+        ),
+        CheckConstraint(
+            "status IN ('reserved', 'settled', 'released')", name="ck_funded_trial_charges_status"
+        ),
+        UniqueConstraint(
+            "workspace_id", "grant_id", "idempotency_key", name="uq_funded_trial_charges_key"
+        ),
+        Index("ix_funded_trial_charges_open", "workspace_id", "grant_id", "status"),
+    )
+
+
+class SqlFundedTrialEvent(OmnigentBase):
+    """Append-only audit record for grants, denials and funding changes."""
+
+    __tablename__ = "funded_trial_events"
+
+    workspace_id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        nullable=False,
+        server_default="0",
+        default=current_workspace_id,
+    )
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    grant_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    actor_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    event: Mapped[str] = mapped_column(String(32), nullable=False)
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        Index("ix_funded_trial_events_user", "workspace_id", "user_id", "created_at"),
+    )
+
+
+class SqlManagedComputeUsage(OmnigentBase):
+    """Lifetime of one managed sandbox generation, for metering and enforcement.
+
+    One row per provisioned generation. ``ended_at`` stays ``NULL`` while the
+    sandbox may still be running; the compute meter closes it exactly once.
+
+    :param funding: ``deployment``, ``trial`` or ``billing`` (who pays).
+    :param last_active_at: Latest observed runner activity on the host.
+    :param deadline_at: Hard stop for the generation, ``NULL`` when unbounded.
+    :param end_reason: ``idle``, ``deadline``, ``replaced``, ``gone`` or ``failed``.
+    :param trial_charge_id: Funded trial compute reservation settled at the end.
+    :param billed_at: When usage was reported to the billing provider.
+    """
+
+    __tablename__ = "managed_compute_usage"
+
+    workspace_id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        nullable=False,
+        server_default="0",
+        default=current_workspace_id,
+    )
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    host_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    sandbox_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    funding: Mapped[str] = mapped_column(String(16), nullable=False)
+    started_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    last_active_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    deadline_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ended_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    end_reason: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    trial_charge_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    billed_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "funding IN ('deployment', 'trial', 'billing')",
+            name="ck_managed_compute_usage_funding",
+        ),
+        Index("ix_managed_compute_usage_open", "ended_at", "workspace_id"),
+        Index("ix_managed_compute_usage_user", "workspace_id", "user_id", "started_at"),
+        Index("ix_managed_compute_usage_sandbox", "workspace_id", "provider", "sandbox_id"),
+    )
+
+
 class SqlSessionPermission(OmnigentBase):
     """
     SQLAlchemy model for the ``session_permissions`` table.

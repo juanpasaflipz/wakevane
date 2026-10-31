@@ -129,6 +129,7 @@ from omnigent.server.managed_hosts import (
     ManagedLaunchTracker,
     ManagedSandboxDeployment,
     RepoWorkspace,
+    WorkspacePreparer,
 )
 from omnigent.server.routes._auth_helpers import (
     require_access as _require_access,
@@ -6434,6 +6435,7 @@ async def _provision_managed_sandbox(
     agent_name: str | None = None,
     host_id: str | None = None,
     relaunch_slice_key_enabled: bool = False,
+    prepare_workspace: WorkspacePreparer | None = None,
 ) -> ManagedHostLaunch | None:
     """
     Run the provision phase of a background managed launch.
@@ -6462,6 +6464,8 @@ async def _provision_managed_sandbox(
         identity.
     :param relaunch_slice_key_enabled: On a relaunch, whether the host routes
         by its own id, as at its first launch.
+    :param prepare_workspace: Step that must succeed on every new sandbox
+        generation before a runner starts, or ``None``.
     :returns: The launch result, or ``None`` when the launch failed
         (the tracker entry is already settled with the reason).
     """
@@ -6490,6 +6494,7 @@ async def _provision_managed_sandbox(
                 agent_name=agent_name,
                 on_stage=_on_stage,
                 slice_key_enabled=relaunch_slice_key_enabled,
+                prepare_workspace=prepare_workspace,
             )
         return await launch_managed_host(
             config=sandbox_config,
@@ -6500,6 +6505,7 @@ async def _provision_managed_sandbox(
             agent_name=agent_name,
             on_stage=_on_stage,
             host_id=host_id,
+            prepare_workspace=prepare_workspace,
         )
     except HTTPException as exc:
         _logger.warning(

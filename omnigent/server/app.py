@@ -1876,11 +1876,18 @@ def create_app(
                 )
                 app_inst.state.managed_sandbox_reaper = managed_sandbox_reaper
                 await managed_sandbox_reaper.start()
+        compute_meter = getattr(
+            getattr(app_inst.state, "sandbox_config", None), "compute_meter", None
+        )
+        if compute_meter is not None:
+            await compute_meter.start()
 
         try:
             with monitor_event_loop():
                 yield
         finally:
+            if compute_meter is not None:
+                await compute_meter.shutdown()
             if managed_sandbox_reaper is not None:
                 await managed_sandbox_reaper.shutdown()
             # Run completion is event-driven (the _publish_status hook) plus a
@@ -3505,6 +3512,68 @@ def create_app(
         ),
         prefix="/v1",
         tags=["sandbox inference"],
+    )
+    from omnigent.server.funded_trial import (
+        FundedTrialConfig,
+        FundedTrialPolicy,
+        bind_trial_inference,
+    )
+    from omnigent.server.funded_trial_store import FundedTrialStore
+    from omnigent.server.routes.funded_trial import create_funded_trial_router
+
+    funded_trial_enabled = resolved_feature_flags.enabled(Feature.FUNDED_TRIAL)
+    app.state.funded_trial = FundedTrialPolicy(
+        # Single-user deployments have no stable account to bind a grant to.
+        enabled=funded_trial_enabled and auth_provider is not None,
+        store=(
+            FundedTrialStore(permission_store.storage_location)
+            if funded_trial_enabled and permission_store is not None
+            else None
+        ),
+        config=FundedTrialConfig.from_environment()
+        if funded_trial_enabled
+        else FundedTrialConfig(),
+    )
+    if getattr(app.state, "sandbox_config", None) is not None:
+        # Shared object: every launch path reading the deployment sees the policy.
+        app.state.sandbox_config.funded_trial = app.state.funded_trial
+        bind_trial_inference(app.state.sandbox_config, app.state.funded_trial)
+        if host_store is not None:
+            from omnigent.server.compute_meter import ComputeMeter
+            from omnigent.server.compute_meter_store import ComputeMeterStore
+            from omnigent.server.egm_outputs import OutputPublisher
+
+            app.state.sandbox_config.compute_meter = ComputeMeter(
+                store=ComputeMeterStore(conversation_store.storage_location),
+                host_store=host_store,
+                conversation_store=conversation_store,
+                sandbox_config=app.state.sandbox_config,
+                output_publisher=OutputPublisher(
+                    store=artifact_store, conversation_store=conversation_store
+                ),
+            )
+    from omnigent.server.routes.design_review_outputs import (
+        create_design_review_outputs_router,
+    )
+
+    app.include_router(
+        create_design_review_outputs_router(
+            artifact_store=artifact_store,
+            conversation_store=conversation_store,
+            permission_store=permission_store,
+            auth_provider=auth_provider,
+        ),
+        prefix="/v1",
+        tags=["design review"],
+    )
+    app.include_router(
+        create_funded_trial_router(
+            policy=app.state.funded_trial,
+            auth_provider=auth_provider,
+            permission_store=permission_store,
+        ),
+        prefix="/v1",
+        tags=["funded trial"],
     )
     # Server-side speech-to-text behind the composer mic button
     # (designs/server-dictation.md). Availability is probed lazily, so
