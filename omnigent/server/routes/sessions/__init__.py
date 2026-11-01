@@ -817,6 +817,7 @@ def create_sessions_router(
     register_runner_ingest: Callable[..., None] | None = None,
     register_startup_dispatch: Callable[..., None] | None = None,
     register_initial_file_upload: Callable[..., None] | None = None,
+    register_session_create: Callable[..., None] | None = None,
 ) -> APIRouter:
     """
     Factory that builds the sessions router.
@@ -884,6 +885,8 @@ def create_sessions_router(
     :param background_title_coordinator: Optional app-owned coordinator for
         semantic title generation after first-turn forwarding. ``None`` disables
         background titles in focused router tests.
+    :param register_session_create: Receives the JSON session-create flow
+        for server flows that start sessions on a caller's behalf.
     :returns: A configured :class:`APIRouter` exposing the
         ``/sessions`` endpoints.
     """
@@ -916,6 +919,7 @@ def create_sessions_router(
         host_registry=host_registry,
         project_store=project_store,
         background_title_coordinator=background_title_coordinator,
+        register_session_create=register_session_create,
     )
 
     register_hooks_routes(

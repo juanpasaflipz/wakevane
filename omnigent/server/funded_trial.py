@@ -381,10 +381,18 @@ def funded_target(deployment: Any, provider: str | None) -> Any | None:
     return target if target is not None and getattr(target, "funding", None) == "trial" else None
 
 
-def require_launch_eligibility(deployment: Any, provider: str | None, owner: str | None) -> None:
+def require_launch_eligibility(
+    deployment: Any,
+    provider: str | None,
+    owner: str | None,
+    capabilities: tuple[str, ...] = (),
+) -> None:
     """Synchronous precheck so an ineligible create fails before anything persists.
 
     The authoritative check is :func:`admit_managed_launch`, which reserves.
+
+    :param capabilities: Grant capabilities the launch needs beyond compute,
+        e.g. ``("coding",)`` for an approved coding session.
     """
     target = funded_target(deployment, provider)
     if target is None:
@@ -392,6 +400,8 @@ def require_launch_eligibility(deployment: Any, provider: str | None, owner: str
     policy: FundedTrialPolicy | None = getattr(deployment, "funded_trial", None)
     if policy is None:
         raise FundedTrialDenied("disabled", "The funded trial is not enabled.")
+    for capability in capabilities:
+        policy.active_grant(owner, capability)
     policy.active_grant(owner, "compute")
     if target.provider not in policy.config.compute_usd_per_hour:
         raise FundedTrialDenied(
@@ -408,6 +418,7 @@ def admit_managed_launch(
     root_session_id: str,
     phase: str,
     launch_id: str,
+    capabilities: tuple[str, ...] = (),
 ) -> TrialCharge | None:
     """Reserve compute before any trial-funded sandbox is provisioned or resumed.
 
@@ -416,6 +427,7 @@ def admit_managed_launch(
 
     :param phase: ``launch``, ``relaunch`` or ``wake`` (audit detail and key).
     :param launch_id: Stable id of this launch attempt; replays reuse its hold.
+    :param capabilities: Grant capabilities required besides compute.
     """
     target = funded_target(deployment, provider)
     if target is None:
@@ -423,6 +435,8 @@ def admit_managed_launch(
     policy: FundedTrialPolicy | None = getattr(deployment, "funded_trial", None)
     if policy is None:
         raise FundedTrialDenied("disabled", "The funded trial is not enabled.")
+    for capability in capabilities:
+        policy.active_grant(owner, capability)
     return policy.reserve_compute(
         owner,
         provider=str(target.provider),
@@ -523,6 +537,7 @@ def prepare_trial_launch(
     root_session_id: str,
     phase: str,
     launch_id: str,
+    capabilities: tuple[str, ...] = (),
 ) -> TrialLaunch:
     """Reserve compute and arm the workspace's gateway credential for one launch.
 
@@ -538,6 +553,7 @@ def prepare_trial_launch(
         root_session_id=root_session_id,
         phase=phase,
         launch_id=launch_id,
+        capabilities=capabilities,
     )
     if charge is None:
         return TrialLaunch(deployment)

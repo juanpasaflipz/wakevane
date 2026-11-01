@@ -16,6 +16,7 @@ import json
 import logging
 import shlex
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
@@ -103,7 +104,8 @@ def collector_command(workspace: str) -> str:
     )
 
 
-def _safe_relative_path(raw: object) -> str:
+def safe_relative_path(raw: object) -> str:
+    """Validate a sandbox-reported relative path; raise on anything unsafe."""
     if not isinstance(raw, str) or not raw or "\x00" in raw or "\\" in raw:
         raise OutputPublicationError("The review produced an invalid file name.")
     path = PurePosixPath(raw)
@@ -138,7 +140,7 @@ def parse_collected(stdout: str) -> list[OutputFile]:
     for entry in entries:
         if not isinstance(entry, dict):
             raise OutputPublicationError("The cloud workspace sent a malformed report.")
-        path = _safe_relative_path(entry.get("path"))
+        path = safe_relative_path(entry.get("path"))
         try:
             data = base64.b64decode(entry.get("content", ""), validate=True)
         except ValueError as exc:
@@ -242,15 +244,21 @@ def publish_outputs(
     )
 
 
-def cloud_review_roots(conversation_store: Any, host_id: str) -> list[Any]:
-    """Root cloud review sessions bound to *host_id*, newest first."""
+def cloud_review_roots(
+    conversation_store: Any,
+    host_id: str,
+    *,
+    selects: Callable[[dict[str, str]], bool] | None = None,
+) -> list[Any]:
+    """Root sessions bound to *host_id* whose labels *selects* (default: cloud reviews)."""
+    selected = selects or (lambda labels: pinned_commit(labels) is not None)
     roots: dict[str, Any] = {}
     after: str | None = None
     while True:
         ids = conversation_store.list_host_conversation_ids(host_id, after=after, limit=32)
         for session_id in ids:
             conversation = conversation_store.get_conversation(session_id)
-            if conversation is None or pinned_commit(conversation.labels) is None:
+            if conversation is None or not selected(conversation.labels or {}):
                 continue
             root_id = conversation.root_conversation_id or conversation.id
             if root_id == conversation.id and conversation.workspace:

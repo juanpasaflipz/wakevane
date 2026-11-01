@@ -3415,6 +3415,9 @@ def create_app(
             register_initial_file_upload=lambda handler: setattr(
                 app.state, "initial_file_upload", handler
             ),
+            register_session_create=lambda handler: setattr(
+                app.state, "create_json_session", handler
+            ),
             register_runner_ingest=lambda handler: setattr(
                 app.state, "runner_event_ingest", handler
             ),
@@ -3541,6 +3544,7 @@ def create_app(
         if host_store is not None:
             from omnigent.server.compute_meter import ComputeMeter
             from omnigent.server.compute_meter_store import ComputeMeterStore
+            from omnigent.server.egm_coding import CodingOutputPublisher, combined_publisher
             from omnigent.server.egm_outputs import OutputPublisher
 
             app.state.sandbox_config.compute_meter = ComputeMeter(
@@ -3548,8 +3552,11 @@ def create_app(
                 host_store=host_store,
                 conversation_store=conversation_store,
                 sandbox_config=app.state.sandbox_config,
-                output_publisher=OutputPublisher(
-                    store=artifact_store, conversation_store=conversation_store
+                output_publisher=combined_publisher(
+                    OutputPublisher(store=artifact_store, conversation_store=conversation_store),
+                    CodingOutputPublisher(
+                        store=artifact_store, conversation_store=conversation_store
+                    ),
                 ),
             )
     from omnigent.server.routes.design_review_outputs import (
@@ -3560,6 +3567,19 @@ def create_app(
         create_design_review_outputs_router(
             artifact_store=artifact_store,
             conversation_store=conversation_store,
+            permission_store=permission_store,
+            auth_provider=auth_provider,
+        ),
+        prefix="/v1",
+        tags=["design review"],
+    )
+    from omnigent.server.routes.design_review_coding import create_design_review_coding_router
+
+    app.include_router(
+        create_design_review_coding_router(
+            artifact_store=artifact_store,
+            conversation_store=conversation_store,
+            agent_store=agent_store,
             permission_store=permission_store,
             auth_provider=auth_provider,
         ),

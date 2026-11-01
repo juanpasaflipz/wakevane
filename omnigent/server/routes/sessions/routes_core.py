@@ -414,8 +414,13 @@ def register_core_routes(
     host_registry: HostRegistry | None = None,
     project_store: ProjectStore | None = None,
     background_title_coordinator: BackgroundSessionTitleCoordinator | None = None,
+    register_session_create: Callable[..., None] | None = None,
 ) -> None:
-    """Register the core session routes on router."""
+    """Register the core session routes on router.
+
+    :param register_session_create: Receives the shared JSON create flow so
+        server-started sessions reuse it.
+    """
 
     async def _check_initial_input(request: Request, event: SessionEventInput | None) -> None:
         """Refuse a malformed first input before the session exists."""
@@ -851,92 +856,26 @@ def register_core_routes(
             )
         return runner_id, launch_failed
 
-    @router.post(
-        "/sessions",
-        status_code=201,
-        response_model=None,
-        # CSRF hardening: this route dispatches on Content-Type (JSON vs
-        # multipart bundled-create), so reject text/plain and other simple
-        # types up front while still allowing both legitimate body shapes.
-        # The multipart shape is CORS-safelisted, so the content-type guard
-        # alone can't stop a cross-site bundle upload — require_trusted_origin
-        # closes that gap (allows absent Origin for non-browser SDK/runner
-        # clients; in local mode a present Origin must be loopback).
-        dependencies=[
-            Depends(require_json_or_multipart_content_type),
-            Depends(require_trusted_origin),
-        ],
-    )
-    async def create_session(
+    async def _create_json_session(
         request: Request,
-    ) -> SessionResponse | CreatedSessionResponse:
+        body: SessionCreateRequest | ProjectSessionCreateRequest,
+        user_id: str | None,
+        *,
+        server_labels: dict[str, str] | None = None,
+    ) -> SessionResponse:
         """
-        Create a session.
+        Create, grant, and launch a session from a validated JSON create body.
 
-        ``application/json`` preserves the existing contract: bind to
-        an already-registered agent by ``agent_id`` and return the full
-        session snapshot. ``multipart/form-data`` is the Alpha
-        runner-state create path: the request carries a JSON
-        ``metadata`` part and a ``bundle`` file part, then the server
-        stores the bundle and creates the conversation row plus
-        session-scoped agent row in one database transaction.
+        Shared by ``POST /v1/sessions`` and server flows that start a session
+        for the caller (an approved Design review coding session), so both
+        pass the same authorization, funding admission and launch path.
 
-        :param request: FastAPI request containing either JSON or
-            multipart form data.
-        :returns: :class:`SessionResponse` for JSON create, or
-            :class:`CreatedSessionResponse` for bundled create.
-        :raises OmnigentError: If metadata, bundle, or agent lookup
-            validation fails, artifact storage is unavailable, or
-            database creation fails.
+        :param request: The request whose caller the session belongs to.
+        :param body: The validated create body.
+        :param user_id: The authenticated caller, or ``None`` without auth.
+        :param server_labels: Server-owned labels stamped on the new row.
+        :returns: The created session snapshot.
         """
-        user_id = _require_user(request, auth_provider)
-        content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
-        form = await request.form(max_files=21) if content_type == "multipart/form-data" else None
-        if form is not None and (form.get("bundle") is not None or "initial_files" not in form):
-            result = await _create_bundled_session_from_multipart(request, user_id)
-            # Surface the freshly-minted session id (the request path has no
-            # {session_id} on create); the middleware promotes a bag session_id
-            # to the audit row's session_id column.
-            add_audit_attrs(session_id=result.session_id, agent=result.agent_id)
-            return result
-
-        if form is not None and not isinstance(form.get("metadata"), str):
-            raise HTTPException(status_code=422, detail=[_multipart_missing_detail("metadata")])
-        try:
-            payload = (
-                json.loads(str(form.get("metadata", "{}")))
-                if form is not None
-                else await request.json()
-            )
-            # Dispatch on the VALUE, not key presence: a null project_id is
-            # "no project", so it must keep the legacy request shape (and its
-            # 422 contract) byte-identical to an absent key.
-            create_model = (
-                ProjectSessionCreateRequest
-                if isinstance(payload, dict) and payload.get("project_id") is not None
-                else SessionCreateRequest
-            )
-            body = create_model.model_validate(payload)
-        except json.JSONDecodeError as exc:
-            raise HTTPException(
-                status_code=422,
-                detail=[
-                    {
-                        "type": "json_invalid",
-                        "loc": ["body"],
-                        "msg": "Invalid JSON",
-                        "input": None,
-                    },
-                ],
-            ) from exc
-        except ValidationError as exc:
-            # include_context=False: pydantic v2 puts the RAW exception
-            # object in ctx for validator-raised ValueErrors, which
-            # JSONResponse cannot serialize — every model_validator 422
-            # on this route 500'd as internal_error. The human-readable
-            # message survives in each entry's `msg`.
-            raise HTTPException(status_code=422, detail=exc.errors(include_context=False)) from exc
-
         # Checked before the session exists so a rejected create leaves nothing
         # behind.
         await _check_initial_input(request, body.initial_input)
@@ -957,6 +896,7 @@ def register_core_routes(
             artifact_store=artifact_store,
             background_title_coordinator=background_title_coordinator,
             project_store=project_store,
+            server_labels=server_labels,
         )
         # Notify the runner about the new session so it can resolve
         # the spec and cache sub_agent_name before the first turn.
@@ -1117,6 +1057,97 @@ def register_core_routes(
             )
         add_audit_attrs(session_id=resp.id, agent=resp.agent_id)
         return resp
+
+    if register_session_create is not None:
+        register_session_create(_create_json_session)
+
+    @router.post(
+        "/sessions",
+        status_code=201,
+        response_model=None,
+        # CSRF hardening: this route dispatches on Content-Type (JSON vs
+        # multipart bundled-create), so reject text/plain and other simple
+        # types up front while still allowing both legitimate body shapes.
+        # The multipart shape is CORS-safelisted, so the content-type guard
+        # alone can't stop a cross-site bundle upload — require_trusted_origin
+        # closes that gap (allows absent Origin for non-browser SDK/runner
+        # clients; in local mode a present Origin must be loopback).
+        dependencies=[
+            Depends(require_json_or_multipart_content_type),
+            Depends(require_trusted_origin),
+        ],
+    )
+    async def create_session(
+        request: Request,
+    ) -> SessionResponse | CreatedSessionResponse:
+        """
+        Create a session.
+
+        ``application/json`` preserves the existing contract: bind to
+        an already-registered agent by ``agent_id`` and return the full
+        session snapshot. ``multipart/form-data`` is the Alpha
+        runner-state create path: the request carries a JSON
+        ``metadata`` part and a ``bundle`` file part, then the server
+        stores the bundle and creates the conversation row plus
+        session-scoped agent row in one database transaction.
+
+        :param request: FastAPI request containing either JSON or
+            multipart form data.
+        :returns: :class:`SessionResponse` for JSON create, or
+            :class:`CreatedSessionResponse` for bundled create.
+        :raises OmnigentError: If metadata, bundle, or agent lookup
+            validation fails, artifact storage is unavailable, or
+            database creation fails.
+        """
+        user_id = _require_user(request, auth_provider)
+        content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
+        form = await request.form(max_files=21) if content_type == "multipart/form-data" else None
+        if form is not None and (form.get("bundle") is not None or "initial_files" not in form):
+            result = await _create_bundled_session_from_multipart(request, user_id)
+            # Surface the freshly-minted session id (the request path has no
+            # {session_id} on create); the middleware promotes a bag session_id
+            # to the audit row's session_id column.
+            add_audit_attrs(session_id=result.session_id, agent=result.agent_id)
+            return result
+
+        if form is not None and not isinstance(form.get("metadata"), str):
+            raise HTTPException(status_code=422, detail=[_multipart_missing_detail("metadata")])
+        try:
+            payload = (
+                json.loads(str(form.get("metadata", "{}")))
+                if form is not None
+                else await request.json()
+            )
+            # Dispatch on the VALUE, not key presence: a null project_id is
+            # "no project", so it must keep the legacy request shape (and its
+            # 422 contract) byte-identical to an absent key.
+            create_model = (
+                ProjectSessionCreateRequest
+                if isinstance(payload, dict) and payload.get("project_id") is not None
+                else SessionCreateRequest
+            )
+            body = create_model.model_validate(payload)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=[
+                    {
+                        "type": "json_invalid",
+                        "loc": ["body"],
+                        "msg": "Invalid JSON",
+                        "input": None,
+                    },
+                ],
+            ) from exc
+        except ValidationError as exc:
+            # include_context=False: pydantic v2 puts the RAW exception
+            # object in ctx for validator-raised ValueErrors, which
+            # JSONResponse cannot serialize — every model_validator 422
+            # on this route 500'd as internal_error. The human-readable
+            # message survives in each entry's `msg`.
+            raise HTTPException(status_code=422, detail=exc.errors(include_context=False)) from exc
+
+        return await _create_json_session(request, body, user_id)
 
     async def _create_bundled_session_from_multipart(
         request: Request,
@@ -3770,6 +3801,12 @@ def register_core_routes(
             dropped_label_keys_set.update(
                 key for key in source.labels if key.startswith(MCP_SELECTION_PREFIX)
             )
+        from omnigent.server.egm_coding import CODING_LABEL_PREFIX
+
+        # A fork is not the approved coding session; only the original stays bound.
+        dropped_label_keys_set.update(
+            key for key in source.labels if key.startswith(CODING_LABEL_PREFIX)
+        )
         dropped_label_keys: frozenset[str] = frozenset(dropped_label_keys_set)
 
         # DANGEROUS codex full-bypass. The source's bypass label is always

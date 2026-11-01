@@ -38,6 +38,7 @@ class Feature(StrEnum):
     EGM_TEMPLATE = "egm_template"
     FUNDED_TRIAL = "funded_trial"
     EGM_CLOUD = "egm_cloud"
+    EGM_CLOUD_CODING = "egm_cloud_coding"
 
 
 @dataclass(frozen=True)
@@ -161,6 +162,15 @@ FEATURE_DEFINITIONS: tuple[FeatureDefinition, ...] = (
     FeatureDefinition(
         feature=Feature.EGM_CLOUD,
         description="Design review in a managed cloud sandbox pinned to an exact commit",
+        owner="server",
+        review_by_release="0.26.0",
+    ),
+    FeatureDefinition(
+        feature=Feature.EGM_CLOUD_CODING,
+        description=(
+            "Approve a cloud Design review specification to start a coding session and "
+            "open a pull request"
+        ),
         owner="server",
         review_by_release="0.26.0",
     ),

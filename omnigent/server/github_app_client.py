@@ -314,6 +314,44 @@ class GitHubAppClient:
             )
         return resp.json()
 
+    async def repository_request(
+        self,
+        access_token: str,
+        method: str,
+        full_name: str,
+        path: str,
+        *,
+        json_body: dict[str, object] | None = None,
+        params: dict[str, str] | None = None,
+        expected: tuple[int, ...] = (200,),
+    ) -> object:
+        """Call a ``/repos/{full_name}{path}`` REST endpoint as the user.
+
+        Used for Git data and pull request writes. Callers validate
+        ``full_name``; this client exposes no merge endpoint.
+
+        :param access_token: A valid user access token.
+        :param method: ``GET``, ``POST`` or ``PATCH``.
+        :param full_name: The repository's ``owner/name``.
+        :param path: Path under the repository, e.g. ``"/git/blobs"``.
+        :param expected: Statuses treated as success.
+        :returns: The decoded JSON body.
+        :raises GitHubApiError: On any other status.
+        """
+        if method not in {"GET", "POST", "PATCH"}:
+            raise ValueError(f"Unsupported repository method {method!r}")
+        url = f"https://api.github.com/repos/{full_name}{path}"
+        async with self._http_client() as client:
+            resp = await client.request(
+                method, url, json=json_body, params=params, headers=_api_headers(access_token)
+            )
+        if resp.status_code not in expected:
+            raise GitHubApiError(
+                f"GitHub {method} /repos/{full_name}{path} returned {resp.status_code}",
+                resp.status_code,
+            )
+        return resp.json()
+
     async def _token_request(self, fields: dict[str, str]) -> GitHubTokenSet:
         """POST the given form fields to the token endpoint and parse the reply."""
         async with self._http_client() as client:

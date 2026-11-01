@@ -4500,6 +4500,7 @@ async def _admit_funded_launch(
     targets. Returns ``None`` after settling the launch as failed on denial;
     a denial creates no sandbox and never retries on another payer.
     """
+    from omnigent.server.egm_coding import CODING_CAPABILITY, coding_binding
     from omnigent.server.funded_trial import (
         TrialLaunch,
         has_trial_targets,
@@ -4514,6 +4515,10 @@ async def _admit_funded_launch(
         if conversation is not None and conversation.root_conversation_id
         else session_id
     )
+    coding = coding_binding(conversation.labels) if conversation is not None else None
+    if coding is not None:
+        # Approved coding continues the review's funded workflow and needs the coding grant.
+        root_session_id = coding.review_session_id
     try:
         return await asyncio.to_thread(
             prepare_trial_launch,
@@ -4524,6 +4529,7 @@ async def _admit_funded_launch(
             root_session_id=root_session_id,
             phase=phase,
             launch_id=uuid.uuid4().hex,
+            capabilities=(CODING_CAPABILITY,) if coding is not None else (),
         )
     except FundedTrialDenied as denied:
         _logger.info(
@@ -4541,12 +4547,23 @@ async def _admit_funded_launch(
 def _cloud_review_preparer(
     conversation: Conversation | None,
 ) -> WorkspacePreparer | None:
-    """Pin and confinement-check a cloud Design review's sandbox, else ``None``.
+    """Pin a cloud review or approved coding session's sandbox, else ``None``.
 
+    A review is also confinement-checked; coding is put on its approved branch.
     Runs on every new generation, since a relaunch re-clones the branch tip.
     """
     from omnigent.server.egm_cloud import pinned_commit, prepare_cloud_review
+    from omnigent.server.egm_coding import coding_binding, prepare_coding_workspace
 
+    coding = coding_binding(conversation.labels) if conversation is not None else None
+    if coding is not None:
+
+        def _prepare_coding(
+            launcher: SandboxHostLauncher, sandbox_id: str, workspace: str
+        ) -> None:
+            prepare_coding_workspace(launcher, sandbox_id, workspace, coding)
+
+        return _prepare_coding
     commit = pinned_commit(conversation.labels) if conversation is not None else None
     if commit is None:
         return None
@@ -11375,6 +11392,7 @@ async def _create_session_from_existing_agent(
     artifact_store: ArtifactStore | None = None,
     background_title_coordinator: BackgroundSessionTitleCoordinator | None = None,
     project_store: ProjectStore | None = None,
+    server_labels: dict[str, str] | None = None,
 ) -> tuple[SessionResponse, Conversation]:
     """
     Create a session bound to an already-registered agent.
@@ -11404,6 +11422,9 @@ async def _create_session_from_existing_agent(
         ``file_id`` references in ``initial_items`` before forwarding
         to the runner.
     :param artifact_store: Optional binary content store for the same.
+    :param server_labels: Server-owned labels a trusted server flow stamps on
+        the new row (e.g. an approved coding session's binding); never taken
+        from the request body.
     :returns: The newly created session snapshot and its conversation row.
     :raises OmnigentError: 404 if no agent matches ``body.agent_id``;
         403/404 if ``parent_session_id`` or session-scoped ``agent_id``
@@ -11705,6 +11726,7 @@ async def _create_session_from_existing_agent(
         )
 
     if body.host_type == "managed":
+        from omnigent.server.egm_coding import CODING_CAPABILITY, coding_binding
         from omnigent.server.funded_trial import require_launch_eligibility
         from omnigent.server.funded_trial_store import FundedTrialDenied
 
@@ -11714,6 +11736,7 @@ async def _create_session_from_existing_agent(
                 getattr(request.app.state, "sandbox_config", None),
                 body.sandbox_provider,
                 user_id,
+                (CODING_CAPABILITY,) if coding_binding(server_labels) is not None else (),
             )
         except FundedTrialDenied as denied:
             raise OmnigentError(denied.message, code=ErrorCode.FORBIDDEN) from None
@@ -12022,6 +12045,7 @@ async def _create_session_from_existing_agent(
                 if key in egm_cloud_parent.labels:
                     initial_labels[key] = egm_cloud_parent.labels[key]
     initial_labels.update(registry_labels)
+    initial_labels.update(server_labels or {})
     if created_worktree_path is not None:
         from omnigent.server.routes._host_worktree import (
             WORKTREE_ROOT_LABEL_KEY,
