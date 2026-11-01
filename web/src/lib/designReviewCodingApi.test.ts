@@ -73,7 +73,13 @@ describe("design review coding API", () => {
     const [listed] = await listDesignApprovals("conv-1");
     expect(listed.codingOutputs).toBeNull();
 
-    const pull = { number: 5, url: "https://github.com/o/r/pull/5", branch: "b", base: "main" };
+    const pull = {
+      number: 5,
+      url: "https://github.com/o/r/pull/5",
+      branch: "b",
+      base: "main",
+      checkpoint: 1,
+    };
     mockAuthenticatedFetch.mockResolvedValueOnce(
       okJson({ approval: { ...APPROVAL_WIRE, pull_request: pull } }),
     );

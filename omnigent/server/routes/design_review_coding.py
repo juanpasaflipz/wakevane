@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.server.auth import LEVEL_OWNER, LEVEL_READ, RESERVED_USER_LOCAL, AuthProvider
 from omnigent.server.egm_coding import (
+    CODING_LAUNCH_ARGS,
     PULL_REQUEST_CAPABILITY,
     CodingBinding,
     PullRequestError,
@@ -99,7 +100,8 @@ def create_design_review_coding_router(
             raise OmnigentError("Approval not found", code=ErrorCode.NOT_FOUND)
         return record
 
-    async def _coding_agent_id(requested: str | None) -> str:
+    async def _coding_agent(requested: str | None) -> tuple[str, list[str] | None]:
+        """Coding agent id and its launch args; Claude runs unattended in the sandbox."""
         from omnigent.native.native_coding_agents import CLAUDE_NATIVE_AGENT_NAME
 
         if requested is not None:
@@ -112,7 +114,10 @@ def create_design_review_coding_router(
             raise OmnigentError(
                 "Design review agents cannot implement an approval", code=ErrorCode.INVALID_INPUT
             )
-        return agent.id
+        # The sandbox holds no provider credentials and opening a PR needs the
+        # owner's click, so prompts would only stall a run nobody is watching.
+        unattended = agent.name == CLAUDE_NATIVE_AGENT_NAME
+        return agent.id, CODING_LAUNCH_ARGS if unattended else None
 
     async def _start_coding_session(
         request: Request,
@@ -130,9 +135,11 @@ def create_design_review_coding_router(
             raise OmnigentError(
                 "Session creation is unavailable on this server", code=ErrorCode.INTERNAL_ERROR
             )
+        agent_id, launch_args = await _coding_agent(body.agent_id)
         create_body = SessionCreateRequest.model_validate(
             {
-                "agent_id": await _coding_agent_id(body.agent_id),
+                "agent_id": agent_id,
+                "terminal_launch_args": launch_args,
                 "host_type": "managed",
                 "sandbox_provider": provider,
                 "workspace": workspace,
@@ -323,8 +330,9 @@ def create_design_review_coding_router(
     async def open_design_pull_request(
         request: Request, session_id: str, approval_id: str
     ) -> dict[str, Any]:
-        """Push the stored coding changes to a new branch and open a pull request.
+        """Push the stored coding changes and open a draft pull request.
 
+        A repeat pushes any newer checkpoint onto the same pull request.
         Uses the owner's GitHub connection. Never merges or deploys.
         """
         from omnigent.server.funded_trial_store import FundedTrialDenied
@@ -361,8 +369,7 @@ def create_design_review_coding_router(
             )
         async with approval_lock(approval_id):
             record = await asyncio.to_thread(_record, root.id, approval_id)
-            if record.get("pull_request"):
-                return {"approval": record, "created": False}
+            previous = record.get("pull_request")
             await _refresh_coding_outputs(request, record)
             manifest = await asyncio.to_thread(
                 read_coding_manifest, artifact_store, root.id, approval_id
@@ -371,6 +378,8 @@ def create_design_review_coding_router(
                 raise OmnigentError(
                     "The coding session has not saved any changes yet", code=ErrorCode.CONFLICT
                 )
+            if previous and previous.get("checkpoint") == manifest["checkpoint"]:
+                return {"approval": record, "created": False, "updated": False}
             login = connection.github_login
             author = {
                 "name": login,
@@ -384,6 +393,7 @@ def create_design_review_coding_router(
                     record=record,
                     manifest=manifest,
                     author=author,
+                    previous=previous,
                 )
             except PullRequestError as exc:
                 raise OmnigentError(
@@ -397,8 +407,8 @@ def create_design_review_coding_router(
                     f"GitHub could not open the pull request ({exc.status_code})",
                     code=ErrorCode.INTERNAL_ERROR,
                 ) from exc
-            record["pull_request"] = {**pull, "opened_by": user_id}
+            record["pull_request"] = pull if previous else {**pull, "opened_by": user_id}
             await asyncio.to_thread(save_approval, artifact_store, record)
-        return {"approval": record, "created": True}
+        return {"approval": record, "created": previous is None, "updated": previous is not None}
 
     return router

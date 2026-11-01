@@ -15294,7 +15294,7 @@
     },
     "/v1/sessions/{session_id}/design-review/approvals/{approval_id}/pull-request": {
       "post": {
-        "description": "Push the stored coding changes to a new branch and open a pull request.\n\nUses the owner's GitHub connection. Never merges or deploys.",
+        "description": "Push the stored coding changes and open a draft pull request.\n\nA repeat pushes any newer checkpoint onto the same pull request.\nUses the owner's GitHub connection. Never merges or deploys.",
         "operationId": "open_design_pull_request_v1_sessions__session_id__design_review_approvals__approval_id__pull_request_post",
         "parameters": [
           {

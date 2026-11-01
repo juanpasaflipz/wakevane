@@ -212,15 +212,23 @@ Behind the `egm_cloud_coding` feature (default off, frontend-visible, review by
   Test output is written by the agent, not executed by the server.
 - **Pull request.** A separate owner action builds a commit from the stored bytes
   with the GitHub Git data API (parent: the pinned commit; fixed dates, so a
-  retry reproduces the same SHA), creates the coding branch and opens a pull
-  request against the review's branch (or the default branch) with the owner's
-  GitHub connection. Trial-funded approvals also need `pull_request`. Missing
-  GitHub connection or write access fails with an explicit message. A recorded
-  pull request is returned on repeat. The client exposes no merge endpoint and
-  nothing deploys.
+  retry reproduces the same SHA), creates the coding branch and opens a **draft**
+  pull request against the review's branch (or the default branch) with the
+  owner's GitHub connection. Trial-funded approvals also need `pull_request`.
+  Missing GitHub connection or write access fails with an explicit message.
+  Repeating the action pushes a newer coding checkpoint onto the same branch as
+  a fast-forward commit (`force: false`); a branch moved on GitHub is reported,
+  never overwritten. The client exposes no merge endpoint and nothing deploys.
+- **Unattended coding.** The Claude coding session launches with
+  `--permission-mode bypassPermissions`, so it continues with the browser
+  closed. This relies on the sandbox holding no provider credentials (the host
+  credential endpoint refuses `omnigent.egm.*` sessions), metered gateway
+  inference, and PRs requiring the owner's click. Other agents keep their own
+  defaults.
 - **Web.** The cloud review's saved-results strip offers **Approve for coding**
   on Markdown files (owner, flag on), links the coding session, shows stored
-  change and test evidence, and offers **Open pull request**.
+  change and test evidence, and offers **Open draft pull request**, then
+  **Push latest changes**.
 
 Routes (all under `/v1`):
 
@@ -233,12 +241,16 @@ Routes (all under `/v1`):
 - `POST /sessions/{id}/design-review/approvals/{approval}/pull-request` — owner
   only.
 
-Open decisions: the coding agent's permission mode (it starts with the agent's
-own defaults, so tool approvals may wait for the owner); whether later coding
-changes should update an already-opened pull request (today the first PR is
-kept); approval idempotency is serialized per replica only (the artifact store
-has no compare-and-set); managed sandboxes may still receive the owner's GitHub
-credential through the existing broker, independent of this stage.
+Settled constraints:
+
+- Coding compute is reserved against the review's root, so it shares the
+  review's concurrency slot. With the default `max_concurrent_roots: 1` this lets
+  coding start while the review sandbox is still idling, and the ledger reports
+  design and coding as one workflow.
+- Approval and pull-request writes are serialized by an in-process lock. The
+  production Railway service has a volume and therefore one replica; GitHub-side
+  writes are also idempotent (same commit SHA, existing branch and PR reused).
+  Running more than one replica requires a database-backed approval row first.
 
 ### Not yet implemented
 

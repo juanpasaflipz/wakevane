@@ -72,11 +72,15 @@ export function DesignReviewOutputs({
     }
   }
 
-  async function run(key: string, action: () => Promise<DesignApproval>, done: string) {
+  async function run(
+    key: string,
+    action: () => Promise<DesignApproval>,
+    done: string | ((result: DesignApproval) => string),
+  ) {
     setBusy(key);
     try {
-      await action();
-      toast.success(done);
+      const result = await action();
+      toast.success(typeof done === "string" ? done : done(result));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Request failed");
     } finally {
@@ -177,14 +181,37 @@ export function DesignReviewOutputs({
                       </Link>
                     )}
                     {approval.pullRequest ? (
-                      <a
-                        className="text-xs underline"
-                        href={approval.pullRequest.url}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Pull request #{approval.pullRequest.number}
-                      </a>
+                      <>
+                        <a
+                          className="text-xs underline"
+                          href={approval.pullRequest.url}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Draft pull request #{approval.pullRequest.number}
+                        </a>
+                        {isOwner && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={busy !== null}
+                            onClick={() => {
+                              const pushed = approval.pullRequest?.checkpoint;
+                              void run(
+                                `pr:${approval.id}`,
+                                () => openDesignPullRequest(sessionId, approval.id),
+                                (result) =>
+                                  result.pullRequest?.checkpoint !== pushed
+                                    ? "Pull request updated"
+                                    : "No new changes to push",
+                              );
+                            }}
+                          >
+                            <GitPullRequestIcon className="size-4" aria-hidden />
+                            Push latest changes
+                          </Button>
+                        )}
+                      </>
                     ) : (
                       isOwner &&
                       approval.codingSessionId && (
@@ -196,12 +223,12 @@ export function DesignReviewOutputs({
                             void run(
                               `pr:${approval.id}`,
                               () => openDesignPullRequest(sessionId, approval.id),
-                              "Pull request opened",
+                              "Draft pull request opened",
                             )
                           }
                         >
                           <GitPullRequestIcon className="size-4" aria-hidden />
-                          Open pull request
+                          Open draft pull request
                         </Button>
                       )
                     )}

@@ -47,6 +47,8 @@ from omnigent.stores.artifact_store import ArtifactStore
 
 _logger = logging.getLogger(__name__)
 
+# Claude Code flags for the unattended coding session.
+CODING_LAUNCH_ARGS = ["--permission-mode", "bypassPermissions"]
 CODING_LABEL_PREFIX = "omnigent.egm.coding."
 APPROVAL_LABEL = CODING_LABEL_PREFIX + "approval"
 REVIEW_LABEL = CODING_LABEL_PREFIX + "review"
@@ -680,14 +682,17 @@ async def open_pull_request(
     record: dict[str, Any],
     manifest: dict[str, Any],
     author: dict[str, str],
+    previous: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Create the coding branch from stored bytes and open (or find) its pull request.
+    """Create the coding branch from stored bytes and open (or find) its draft pull request.
 
     The commit has fixed dates and parents, so a retry reproduces the same SHA
-    and reuses a branch an interrupted attempt already created.
+    and reuses a branch an interrupted attempt already created. With *previous*,
+    the newer checkpoint is fast-forwarded onto the existing pull request's branch.
 
     :param client: :class:`~omnigent.server.github_app_client.GitHubAppClient`.
     :param author: ``{"name", "email"}`` attributed on the commit.
+    :param previous: The pull request recorded for this approval, if any.
     :raises PullRequestError: When GitHub refuses the writes.
     """
     from omnigent.server.github_app_client import GitHubApiError
@@ -740,15 +745,37 @@ async def open_pull_request(
         "/git/commits",
         expected=(201,),
         json_body={
-            "message": f"Implement approved design {record['spec_path']}\n\n"
-            f"Approval {approval}; specification sha256 {record['spec_sha256']}.",
+            "message": f"{'Update' if previous else 'Implement'} approved design "
+            f"{record['spec_path']}\n\n"
+            f"Approval {approval}; specification sha256 {record['spec_sha256']}; "
+            f"checkpoint {manifest['checkpoint']}.",
             "tree": new_tree["sha"],
-            "parents": [record["commit"]],
+            "parents": [previous["commit"] if previous else record["commit"]],
             "author": signature,
             "committer": signature,
         },
     )
     branch = record["coding_branch"]
+    if previous is not None:
+        try:
+            await call(
+                "PATCH",
+                f"/git/refs/heads/{branch}",
+                json_body={"sha": commit["sha"], "force": False},
+            )
+        except GitHubApiError as exc:
+            if exc.status_code != 422:
+                raise
+            raise PullRequestError(
+                f"Branch {branch} changed on GitHub since the last update; "
+                "the new changes were not pushed."
+            ) from exc
+        return {
+            **previous,
+            "commit": commit["sha"],
+            "checkpoint": manifest["checkpoint"],
+            "updated_at": int(time.time()),
+        }
     try:
         await call(
             "POST",
@@ -780,6 +807,7 @@ async def open_pull_request(
                 "head": branch,
                 "base": base,
                 "body": pull_request_body(record, manifest),
+                "draft": True,
             },
         )
     return {

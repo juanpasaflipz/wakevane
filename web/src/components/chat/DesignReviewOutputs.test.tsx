@@ -9,7 +9,9 @@ import {
   openDesignPullRequest,
 } from "@/lib/designReviewCodingApi";
 import { getDesignReviewOutputs } from "@/lib/designReviewOutputsApi";
+import { toast } from "sonner";
 
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("@/lib/designReviewOutputsApi", () => ({
   getDesignReviewOutputs: vi.fn(),
   downloadDesignReviewOutput: vi.fn(),
@@ -120,9 +122,42 @@ describe("DesignReviewOutputs approval", () => {
     // The approved revision is not offered for approval again.
     expect(screen.queryByRole("button", { name: /Approve for coding/ })).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: /Open pull request/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Open draft pull request/ }));
     await waitFor(() =>
       expect(openDesignPullRequest).toHaveBeenCalledWith("conv-1", "0123456789abcdef"),
     );
+  });
+
+  it("pushes newer coding changes onto the existing draft pull request", async () => {
+    const pullRequest = {
+      number: 5,
+      url: "https://github.com/o/r/pull/5",
+      branch: "wakevane/design-0123456789",
+      base: "main",
+      checkpoint: 1,
+    };
+    const approval = {
+      id: "0123456789abcdef",
+      specPath: "run/r2.md",
+      specSha256: SHA256,
+      commit: COMMIT,
+      codingBranch: "wakevane/design-0123456789",
+      codingSessionId: "conv-2",
+      codingError: null,
+      pullRequest,
+      codingOutputs: null,
+    };
+    vi.mocked(listDesignApprovals).mockResolvedValue([approval]);
+    vi.mocked(openDesignPullRequest).mockResolvedValue({
+      ...approval,
+      pullRequest: { ...pullRequest, checkpoint: 2 },
+    });
+    renderOutputs({ codingEnabled: true, isOwner: true });
+    await expand();
+
+    expect(await screen.findByRole("link", { name: "Draft pull request #5" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Open draft pull request/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Push latest changes/ }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Pull request updated"));
   });
 });

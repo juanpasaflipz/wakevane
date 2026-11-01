@@ -1,12 +1,14 @@
 import { authenticatedFetch } from "./identity";
 import { apiErrorFromResponse } from "./sessionsApi";
 
-/** Pull request opened from an approval's stored coding changes. */
+/** Draft pull request opened from an approval's stored coding changes. */
 export interface DesignPullRequest {
   number: number;
   url: string;
   branch: string;
   base: string;
+  /** Coding checkpoint last pushed to the pull request's branch. */
+  checkpoint: number;
 }
 
 /** Latest stored changes of an approval's coding session. */
@@ -108,6 +110,7 @@ export async function listDesignApprovals(sessionId: string): Promise<DesignAppr
 }
 
 /** Open a pull request from an approval's stored changes. Never merges. */
+/** Open the draft pull request, or push a newer checkpoint onto it. */
 export function openDesignPullRequest(
   sessionId: string,
   approvalId: string,

@@ -172,7 +172,7 @@ class _HeaderAuth:
 
 class _Agents:
     def get_by_name(self, name: str) -> Any:
-        return SimpleNamespace(id="agent-claude", managed_by=None)
+        return SimpleNamespace(id="agent-claude", name=name, managed_by=None)
 
     def get(self, agent_id: str) -> Any:
         return None
@@ -199,15 +199,21 @@ class _GitHub:
 
     def __init__(self) -> None:
         self.requests: list[httpx.Request] = []
+        self.commits = 0
+        self.fast_forward_status = 200
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         path = request.url.path.removeprefix("/repos/org/repo")
+        if (request.method, path) == ("POST", "/git/commits"):
+            self.commits += 1
+            return httpx.Response(201, json={"sha": "de"[self.commits % 2] * 40})
+        if request.method == "PATCH" and path.startswith("/git/refs/heads/"):
+            return httpx.Response(self.fast_forward_status, json={})
         routes: dict[tuple[str, str], tuple[int, Any]] = {
             ("GET", f"/git/commits/{'c' * 40}"): (200, {"tree": {"sha": "tree-base"}}),
             ("POST", "/git/blobs"): (201, {"sha": "blob-1"}),
             ("POST", "/git/trees"): (201, {"sha": "tree-new"}),
-            ("POST", "/git/commits"): (201, {"sha": "d" * 40}),
             ("POST", "/git/refs"): (201, {}),
             ("GET", "/pulls"): (200, []),
             ("POST", "/pulls"): (
@@ -324,6 +330,7 @@ async def test_owner_approval_starts_one_bound_coding_session(review: dict[str, 
         "agent-claude",
     )
     assert body.parent_session_id is None
+    assert body.terminal_launch_args == ["--permission-mode", "bypassPermissions"]
     text = body.initial_input.data["content"][0]["text"]
     assert _SPEC.decode() in text and _SPEC_SHA in text
     binding = coding_binding(created["labels"])
@@ -375,7 +382,9 @@ async def test_approval_requires_flag_and_a_cloud_review(review: dict[str, Any])
     assert review["created"] == []
 
 
-def _store_coding_changes(review: dict[str, Any], approval: dict[str, Any]) -> None:
+def _store_coding_changes(
+    review: dict[str, Any], approval: dict[str, Any], data: bytes = b"print(1)\n"
+) -> None:
     from omnigent.server.egm_coding import store_coding_outputs
 
     binding = coding_binding(
@@ -393,9 +402,7 @@ def _store_coding_changes(review: dict[str, Any], approval: dict[str, Any]) -> N
         binding=binding,
         session_id="coding-1",
         report={
-            "files": [
-                {"path": "tasks.py", "mode": "100644", "status": "A", "data": b"print(1)\n"}
-            ],
+            "files": [{"path": "tasks.py", "mode": "100644", "status": "A", "data": data}],
             "deleted": ["old.txt"],
             "patch": b"diff --git a/tasks.py b/tasks.py\n",
             "patch_truncated": False,
@@ -443,11 +450,50 @@ async def test_pull_request_opens_from_stored_changes_and_never_merges(
         next(r for r in requests if r.url.path.endswith("/pulls") and r.method == "POST").content
     )
     assert created["head"] == approval["coding_branch"] and _SPEC_SHA in created["body"]
+    assert created["draft"] is True
 
     # Opening again returns the recorded pull request without touching GitHub.
     before = len(requests)
     again = await review["client"].post(url, headers=owner)
     assert again.json()["created"] is False and len(requests) == before
+
+
+async def test_later_checkpoint_fast_forwards_the_same_pull_request(
+    review: dict[str, Any],
+) -> None:
+    approval = (await _approve(review)).json()["approval"]
+    url = f"/v1/sessions/{review['root'].id}/design-review/approvals/{approval['id']}/pull-request"
+    owner = {"x-test-user": "owner"}
+    _store_coding_changes(review, approval)
+    first = (await review["client"].post(url, headers=owner)).json()["approval"]["pull_request"]
+
+    _store_coding_changes(review, approval, data=b"print(2)\n")
+    updated = await review["client"].post(url, headers=owner)
+    assert updated.status_code == 200, updated.text
+    assert (updated.json()["created"], updated.json()["updated"]) == (False, True)
+    pull = updated.json()["approval"]["pull_request"]
+    assert (pull["number"], pull["checkpoint"]) == (first["number"], first["checkpoint"] + 1)
+    assert pull["commit"] != first["commit"]
+
+    requests = review["github"].requests
+    assert sum(r.url.path.endswith("/pulls") and r.method == "POST" for r in requests) == 1
+    second_commit = json.loads(
+        [r for r in requests if r.url.path.endswith("/git/commits")][-1].content
+    )
+    assert second_commit["parents"] == [first["commit"]]
+    [move] = [r for r in requests if r.method == "PATCH"]
+    assert json.loads(move.content) == {"sha": pull["commit"], "force": False}
+
+    # A branch someone else moved is never force-pushed over.
+    review["github"].fast_forward_status = 422
+    _store_coding_changes(review, approval, data=b"print(3)\n")
+    diverged = await review["client"].post(url, headers=owner)
+    assert diverged.status_code == 409
+    assert "changed on GitHub" in diverged.json()["message"]
+    stored = await review["client"].get(
+        f"/v1/sessions/{review['root'].id}/design-review/approvals", headers=owner
+    )
+    assert stored.json()["approvals"][0]["pull_request"]["commit"] == pull["commit"]
 
 
 async def test_trial_coding_launch_without_coding_grant_creates_no_sandbox(
