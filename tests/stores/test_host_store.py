@@ -97,6 +97,21 @@ def test_launch_admission_keeps_saved_profiles_on_managed_hosts(
         admit()
 
 
+def test_bound_session_ids_lists_only_sessions_on_that_host(
+    host_store: HostStore, db_uri: str
+) -> None:
+    host_id, other_id = uuid.uuid4().hex, uuid.uuid4().hex
+    conversations = SqlAlchemyConversationStore(db_uri)
+    first, second, elsewhere, unbound = (conversations.create_conversation() for _ in range(4))
+    for conv, bound_to in ((first, host_id), (second, host_id), (elsewhere, other_id)):
+        conversations.set_host_id(conv.id, bound_to, workspace="/tmp")
+
+    assert sorted(host_store.bound_session_ids(host_id)) == sorted([first.id, second.id])
+    assert host_store.bound_session_ids(other_id) == [elsewhere.id]
+    assert unbound.id not in host_store.bound_session_ids(host_id)
+    assert host_store.bound_session_ids(uuid.uuid4().hex) == []
+
+
 def test_upsert_creates_host_on_first_connect(
     host_store: HostStore,
 ) -> None:

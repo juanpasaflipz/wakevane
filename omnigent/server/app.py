@@ -4669,7 +4669,7 @@ def create_app(
         from omnigent.server.routes.host_credentials import create_host_credentials_router
 
         app.include_router(
-            create_host_credentials_router(host_store),
+            create_host_credentials_router(host_store, conversation_store),
             prefix="/v1",
             tags=["hosts"],
         )
