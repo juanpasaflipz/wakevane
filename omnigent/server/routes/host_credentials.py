@@ -26,6 +26,10 @@ in-sandbox process that can reach this endpoint (it authenticates with the
 launch token baked into the sandbox) can obtain that credential for its TTL. So
 the trust boundary is the sandbox itself, not this endpoint. See
 ``designs/CREDENTIAL_STORE.md``.
+
+Design review sandboxes (sessions carrying server-owned ``omnigent.egm.*``
+labels) are refused every provider: their reviewers and coding agents must not
+hold the owner's credentials, and pull requests are written server-side.
 """
 
 from __future__ import annotations
@@ -36,15 +40,34 @@ import logging
 from fastapi import APIRouter, Header, HTTPException, Request, Response
 
 from omnigent.server.connections_registry import connection_providers
+from omnigent.stores.conversation_store import ConversationStore
 from omnigent.stores.host_store import HostStore
 
 _logger = logging.getLogger(__name__)
 
+DESIGN_REVIEW_LABEL_PREFIX = "omnigent.egm."
 
-def create_host_credentials_router(host_store: HostStore) -> APIRouter:
+
+def _backs_design_review(
+    host_store: HostStore, conversation_store: ConversationStore, host_id: str
+) -> bool:
+    """Whether any session bound to *host_id* is a Design review or its coding stage."""
+    for session_id in host_store.bound_session_ids(host_id):
+        conversation = conversation_store.get_conversation(session_id)
+        labels = conversation.labels if conversation is not None else None
+        if labels and any(key.startswith(DESIGN_REVIEW_LABEL_PREFIX) for key in labels):
+            return True
+    return False
+
+
+def create_host_credentials_router(
+    host_store: HostStore, conversation_store: ConversationStore | None = None
+) -> APIRouter:
     """Build the host-facing, provider-generic credential router.
 
     :param host_store: Resolves a launch token + host id to the session owner.
+    :param conversation_store: Reads bound session labels so Design review
+        sandboxes are refused; ``None`` skips that check (no sessions to bind).
     :returns: A router exposing ``GET /hosts/{host_id}/credentials/{provider}``.
     """
     resolvers = {
@@ -80,6 +103,21 @@ def create_host_credentials_router(host_store: HostStore) -> APIRouter:
         )
         if managed is None:
             raise HTTPException(status_code=401, detail="unauthenticated")
+        if conversation_store is not None:
+            try:
+                design_review = await asyncio.to_thread(
+                    _backs_design_review, host_store, conversation_store, host_id
+                )
+            except Exception:  # fail closed: an unknown binding must not vend
+                _logger.warning("host session lookup failed for %r", host_id, exc_info=True)
+                raise HTTPException(
+                    status_code=503, detail="credential lookup unavailable"
+                ) from None
+            if design_review:
+                raise HTTPException(
+                    status_code=403,
+                    detail="credentials are not available to Design review sandboxes",
+                )
         # Resolve provider only after auth so the endpoint reveals nothing to an
         # unauthenticated caller. A resolver with no configured store on this
         # server (or an unknown provider) is a 404 — nothing to vend.

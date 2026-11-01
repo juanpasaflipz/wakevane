@@ -888,6 +888,23 @@ class HostStore:
                 return None
             return _row_to_host(row)
 
+    def bound_session_ids(self, host_id: str) -> list[str]:
+        """
+        Return the ids of the sessions currently bound to *host_id*.
+
+        :param host_id: Host identifier, e.g. ``"host_a1b2c3d4..."``.
+        :returns: Session ids whose metadata names this host, possibly empty.
+        """
+        with self._session("list_host_bound_sessions") as session:
+            return list(
+                session.execute(
+                    select(SqlConversationMetadata.id).where(
+                        SqlConversationMetadata.workspace_id == current_workspace_id(),
+                        SqlConversationMetadata.host_id == host_id,
+                    )
+                ).scalars()
+            )
+
     def host_identity_taken(self, *, host_id: str, user_id: str, name: str) -> bool:
         """
         Whether a host row already holds *host_id*, or *name* for *user_id*.
