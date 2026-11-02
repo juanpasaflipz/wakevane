@@ -6,8 +6,9 @@
 # NOT execute agent harnesses — runners run on the user's local machine
 # and dial in via WS /v1/runner/tunnel.
 #
-# As a consequence: no tmux, no git, no harness SDK runtime
-# requirements in the final image. The omnigent package is still
+# As a consequence: no tmux and no harness SDK runtime requirements in
+# the final image; git is present only so cloud Design review can pin a
+# repository's commit with `git ls-remote`. The omnigent package is still
 # installed in full (its pyproject pulls claude-agent-sdk +
 # openai-agents transitively), so the bits are on disk; they are
 # simply never imported because HarnessProcessManager is never
@@ -434,10 +435,10 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PATH="/opt/venv/bin:${PATH}"
 
-# curl + ca-certificates only — for the HEALTHCHECK and for outbound
-# HTTPS to LLM gateways / external services.
+# curl + ca-certificates for the HEALTHCHECK and outbound HTTPS to LLM
+# gateways / external services; git for cloud Design review commit pinning.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends curl ca-certificates \
+ && apt-get install -y --no-install-recommends curl ca-certificates git \
  && rm -rf /var/lib/apt/lists/*
 
 # Preserve /build/ in the runtime stage — the venv's editable install
