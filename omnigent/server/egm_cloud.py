@@ -129,6 +129,16 @@ def resolve_commit_sync(repository: str, branch: str | None) -> str:
     raise CloudReviewError(f"Branch {branch!r} was not found in the repository.")
 
 
+def cloud_review_workspace(body: Any) -> str | None:
+    """The one repository a managed create names, via ``workspace`` or ``workspaces``."""
+    repositories = body.managed_repo_workspaces()
+    if len(repositories) > 1:
+        raise OmnigentError(
+            "Cloud Design review takes exactly one repository", code=ErrorCode.INVALID_INPUT
+        )
+    return repositories[0] if repositories else None
+
+
 async def resolve_cloud_target(workspace: str | None) -> CloudReviewTarget:
     """Validate a managed create's repository workspace and pin its commit."""
     from omnigent.server.managed_hosts import parse_repo_workspace
