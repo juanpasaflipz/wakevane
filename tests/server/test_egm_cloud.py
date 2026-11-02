@@ -8,15 +8,18 @@ from pathlib import Path
 
 import pytest
 
+from omnigent.errors import OmnigentError
 from omnigent.server.egm_cloud import (
     CloudReviewError,
     CloudReviewTarget,
     checkout_command,
     cloud_review_labels,
+    cloud_review_workspace,
     evaluate_probe,
     pinned_commit,
     resolve_commit_sync,
 )
+from omnigent.server.schemas import SessionCreateRequest
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -111,3 +114,29 @@ def test_pinned_commit_reads_only_cloud_review_labels() -> None:
 def test_resolve_commit_requires_https(repository: str) -> None:
     with pytest.raises(CloudReviewError, match="https://"):
         resolve_commit_sync(repository, None)
+
+
+_REPO = "https://github.com/org/repo"
+
+
+@pytest.mark.parametrize(
+    ("fields", "expected"),
+    [
+        pytest.param({"workspace": _REPO}, _REPO, id="workspace"),
+        pytest.param({"workspaces": [f"{_REPO}#main"]}, f"{_REPO}#main", id="web-workspaces"),
+        pytest.param({}, None, id="none"),
+    ],
+)
+def test_cloud_review_workspace_reads_either_field(fields: dict, expected: str | None) -> None:
+    body = SessionCreateRequest.model_validate(
+        {"agent_id": "ab" * 16, "host_type": "managed", **fields}
+    )
+    assert cloud_review_workspace(body) == expected
+
+
+def test_cloud_review_workspace_rejects_several_repositories() -> None:
+    body = SessionCreateRequest.model_validate(
+        {"agent_id": "ab" * 16, "host_type": "managed", "workspaces": [_REPO, f"{_REPO}-two"]}
+    )
+    with pytest.raises(OmnigentError, match="exactly one repository"):
+        cloud_review_workspace(body)

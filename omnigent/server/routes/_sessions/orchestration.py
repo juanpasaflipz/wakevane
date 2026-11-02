@@ -11464,7 +11464,11 @@ async def _create_session_from_existing_agent(
             require_egm_target,
             validate_continuation,
         )
-        from omnigent.server.egm_cloud import pinned_commit, resolve_cloud_target
+        from omnigent.server.egm_cloud import (
+            cloud_review_workspace,
+            pinned_commit,
+            resolve_cloud_target,
+        )
         from omnigent.server.feature_flags import Feature
 
         reject_egm_overrides(body)
@@ -11486,7 +11490,7 @@ async def _create_session_from_existing_agent(
             and request.app.state.feature_flags.enabled(Feature.EGM_CLOUD)
         ):
             # Pinned before anything persists, so a moving branch cannot change the review.
-            egm_cloud_target = await resolve_cloud_target(body.workspace)
+            egm_cloud_target = await resolve_cloud_target(cloud_review_workspace(body))
             egm_cloud_review = True
         else:
             require_egm_target(body.host_id, body.workspace, body.host_type)
