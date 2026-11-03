@@ -209,7 +209,11 @@ Keep the detailed acceptance contract in the Markdown body. The quote check
 validates literal correspondence, not semantic completeness.
 
 Call `sys_egm_review` with `action: freeze`, absolute `spec_path`, `contract_path`,
-and `evidence_paths` (source/test files). It snapshots the artifact bytes, hashes,
+and `evidence_paths` (existing repository files outside `docs/designs/egm`).
+For a new-file design, use existing source, configuration, or a README as the
+baseline; future implementation paths need not exist. Never create placeholder
+code/tests or use review artifacts as repository evidence. The tool requires a
+nonempty evidence list. It snapshots the artifact bytes, hashes,
 HEAD, index diff and dirty/untracked contents, excluding design outputs. Send its
 returned packet as JSON text in `sys_session_send.args.input`, with
 `purpose: review`, `agent: goldfish`, and a fresh `egm-...` title. Change only
@@ -235,8 +239,12 @@ than risking a duplicate paid reviewer.
 
 The gate validates structured evidence and workflow transitions. It cannot prove
 that an author disclosed every unresolved decision, that a reviewer classified a
-finding honestly, or that freeform chat prose is true. Markdown files and session
-titles remain explanatory, not machine-authoritative readiness. Implementation
+finding honestly, or that draft artifacts are true. The coordinator's runner
+stream suppresses model-authored chat prose and emits a completion status derived
+from a fresh ledger/hash check. Tool activity and Goldfish reports remain visible.
+This prevents an unreviewed draft's prose from becoming a ready chat verdict;
+Markdown files and session titles remain explanatory, not machine-authoritative
+readiness. Implementation
 approval, deployment authorization and execution results remain separate.
 
 Run regression coverage with:

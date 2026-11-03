@@ -234,7 +234,9 @@ class ReviewLedger:
             )
         ):
             raise ValueError(
-                "Source/test evidence must be absolute paths outside review artifacts"
+                "Evidence must be a nonempty list of absolute existing repository files "
+                "outside docs/designs/egm. For new-file designs, use existing source, "
+                "configuration or README files; do not create placeholder code/tests."
             )
         packet = Packet(
             stage="comprehension",
@@ -479,3 +481,74 @@ class ReviewLedger:
                 "execution_status": "not_run",
                 "approval": "pending",
             }
+
+
+class ReviewOutputGate:
+    """Keep coordinator chat status runtime-owned, including its live stream.
+
+    Tool events and reviewer reports remain intact. Coordinator prose is kept
+    in design artifacts; freeform text is never used as the completion verdict.
+    """
+
+    def __init__(self, session: str, workspace: Path):
+        self.session = session
+        self.workspace = workspace
+
+    @staticmethod
+    def suppresses(event: dict) -> bool:
+        """Drop every assistant-text surface before live publication/persistence."""
+        kind = event.get("type", "")
+        if kind.startswith(("response.output_text.", "response.content_part.")):
+            return True
+        return (
+            kind.startswith("response.output_item.")
+            and (event.get("item") or {}).get("type") == "message"
+        )
+
+    def completion(self) -> str:
+        """Recheck the ledger and artifact hashes at completion; fail closed."""
+        try:
+            status = ReviewLedger(self.session, self.workspace).status()
+        except (OSError, ValueError, sqlite3.Error, subprocess.SubprocessError):
+            return "Design review status unavailable. Readiness has not been established."
+        if status["ready"]:
+            return (
+                f"Design review ready for implementation: revision {status['revision']}. "
+                "All three review stages passed against the unchanged artifacts and repository. "
+                "Implementation acceptance tests have not run. Approval remains pending."
+            )
+        if status["state"] == "drafting":
+            return (
+                "Design review incomplete: no revision has been frozen. Runtime ready=false. "
+                "Use existing repository evidence and complete the three review stages. "
+                "Exported drafts have not passed review."
+            )
+        pending = [r["stage"] for r in status["reviews"] if r["error"] == "pending"]
+        if pending and not status["blockers"]:
+            return (
+                "Design review in progress. Runtime ready=false. Waiting for "
+                + ", ".join(pending)
+                + " review."
+            )
+        return (
+            "Design review incomplete. Runtime ready=false. "
+            f"Unresolved blockers: {len(status['blockers'])}. "
+            "Review stages still required: "
+            + (
+                ", ".join(status["missing_stages"])
+                or "none; resolve the artifact/decision blockers"
+            )
+            + ". Exported drafts are not approved for implementation."
+        )
+
+    @staticmethod
+    def terminal(event: dict, text: str) -> dict:
+        """Remove provider prose also carried in a terminal response payload."""
+        response = dict(event.get("response") or {})
+        if "output" in response:
+            response["output"] = [
+                item for item in response["output"] if item.get("type") != "message"
+            ]
+        if "output_text" in response:
+            response["output_text"] = text
+        return {**event, "response": response}

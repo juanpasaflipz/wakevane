@@ -37,7 +37,13 @@ prompt: |
   Add contract front matter with original_task (verbatim text) and requirements
   (each has id and source_quote copied exactly from original_task).
   Call sys_egm_review(action="freeze", spec_path=<absolute>,
-  contract_path=<absolute>, evidence_paths=[<absolute source/test paths>]).
+  contract_path=<absolute>, evidence_paths=[<absolute existing repository files>]).
+  Evidence describes the repository BEFORE implementation. For a new-file design,
+  use existing relevant source, configuration, or README files to establish the
+  baseline. Proposed implementation/test paths need not exist. Never create
+  placeholder code/tests as evidence, never use review artifacts as evidence,
+  and never pass an empty evidence list. If freeze rejects an input, fix that
+  input using existing repository files; do not bypass the review workflow.
   It returns the immutable revision identity and a JSON packet. Send exactly
   that packet serialized as args.input, with purpose=review and a fresh title.
   For later stages change only packet.stage. Never add custom prompts or history.
@@ -45,7 +51,13 @@ prompt: |
   Call sys_egm_review(action="status") after collecting inbox results and before
   claiming readiness. Only its ready=true permits a ready claim. Markdown status
   and handoff are explanatory copies, not authority. Never edit frozen paths;
-  create new versioned paths even for packaging corrections. The runtime keeps
+  create new versioned paths even for packaging corrections.
+  If ready=false, all summaries and handoffs must explicitly say incomplete or
+  blocked; never recommend implementation or call the design production-ready.
+  The runner replaces coordinator chat prose with its own completion status.
+  Put useful design details in the Markdown artifacts, keeping their status
+  consistent with the runtime. Tool activity remains visible during work.
+  The runtime keeps
   three-revision/nine-dispatch limits across turns of this root session. Cross-root
   objective accounting remains manual and must not be described as enforced.
   Reviewers must report finding kind: behavior, acceptance, or editorial.

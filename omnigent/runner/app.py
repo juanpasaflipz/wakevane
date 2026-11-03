@@ -5485,6 +5485,18 @@ def create_runner_app(
                 stream_spec = _unwrap_resolved_spec(await spec_resolver(_ds_agent_id, conv_id))
             except (OmnigentError, httpx.HTTPError, RuntimeError):
                 stream_spec = None
+        from omnigent.runner.egm_review import ReviewOutputGate
+        from omnigent.runner.egm_review import enabled as egm_enabled
+
+        egm_output_gate = None
+        if egm_enabled(stream_spec):
+            from omnigent.runner.tool_dispatch import _effective_runner_os_env_spec
+
+            review_os = _effective_runner_os_env_spec(
+                stream_spec, conv_id, await _session_runtime_cwd(conv_id)
+            )
+            assert review_os.cwd is not None
+            egm_output_gate = ReviewOutputGate(conv_id, Path(review_os.cwd))
         if has_copy_on_write(
             getattr(stream_spec, "os_env", None)
         ) or resource_registry.uses_copy_on_write(conv_id):
@@ -5870,6 +5882,22 @@ def create_runner_app(
 
                             _defer_publish = False
                             if event is not None:
+                                if egm_output_gate is not None:
+                                    if egm_output_gate.suppresses(event):
+                                        continue
+                                    if event.get("type") == "response.completed":
+                                        review_text = await _asyncio.to_thread(
+                                            egm_output_gate.completion
+                                        )
+                                        review_delta = {
+                                            "type": "response.output_text.delta",
+                                            "delta": review_text,
+                                        }
+                                        _text_acc.append(review_text)
+                                        _publish_event(conv_id, review_delta)
+                                        yield _encode_sse_event(review_delta)
+                                        event = egm_output_gate.terminal(event, review_text)
+                                        raw_sse_bytes = _encode_sse_event(event)
                                 if event.get("type") == "response.created":
                                     resp_obj = event.get("response") or {}
                                     _response_id = resp_obj.get("id")

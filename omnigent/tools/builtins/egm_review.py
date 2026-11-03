@@ -12,7 +12,9 @@ class EgmReviewTool(Tool):
     def description(cls):
         return (
             "Freeze versioned design artifacts or compute authoritative readiness "
-            "from bound reviewer results. Never submit reports yourself."
+            "from bound reviewer results. Evidence must be existing repository files "
+            "outside docs/designs/egm (source, config, or README for a new-file design), "
+            "not future implementation paths or placeholders. Never submit reports yourself."
         )
 
     def get_schema(self):

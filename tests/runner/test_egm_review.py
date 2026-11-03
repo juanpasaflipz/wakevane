@@ -44,7 +44,7 @@ def review(tmp_path):
         '---\noriginal_task: "One test per rule."\nrequirements:\n'
         '  - id: REQ-1\n    source_quote: "One test per rule."\n---\nContract.\n'
     )
-    ledger = ReviewLedger("root", repo, root=tmp_path / "state")
+    ledger = ReviewLedger("root", repo, root=tmp_path / "egm-reviews")
     frozen = ledger.freeze(str(spec), str(contract), [str(source)])
     return ledger, frozen["packet"], spec, contract, source
 
@@ -455,3 +455,124 @@ def test_early_completion_is_retained_until_child_binding(review):
     ledger.bind(title, json.dumps({"conversation_id": "fast-child"}))
     ledger.record(payload)
     assert "comprehension" not in ledger.status()["missing_stages"]
+
+
+def test_new_file_design_freezes_existing_readme_without_creating_implementation(review):
+    ledger, _packet, spec, contract, _source = review
+    readme = ledger.workspace / "README"
+    readme.write_text("A repository with no greeting implementation yet.\n")
+    frozen = ledger.freeze(str(spec), str(contract), [str(readme)])
+    assert str(readme) in frozen["packet"]["evidence"]
+    assert not (ledger.workspace / "shared/greeting.py").exists()
+    assert not (ledger.workspace / "tests/test_greeting.py").exists()
+
+
+def test_completion_rechecks_ready_artifacts_and_fails_closed(review, monkeypatch):
+    from omnigent.runner.egm_review import ReviewOutputGate
+
+    ledger, packet, spec, *_ = review
+    monkeypatch.setattr("omnigent.process_logging.data_dir", lambda: ledger.path.parent.parent)
+    gate = ReviewOutputGate("root", ledger.workspace)
+    assert "incomplete" in gate.completion()
+    child = dispatch(ledger, packet, "comprehension")
+    assert "Waiting for comprehension" in gate.completion()
+    complete(ledger, child, report(packet, "comprehension"))
+    for stage in ("critic", "readiness"):
+        complete(ledger, dispatch(ledger, packet, stage), report(packet, stage))
+    assert "ready for implementation" in gate.completion()
+    spec.write_text(spec.read_text() + "Changed after review.\n")
+    assert "Runtime ready=false" in gate.completion()
+    ledger.path.write_bytes(b"corrupt database")
+    assert "Readiness has not been established" in gate.completion()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("coordinator", [True, False])
+async def test_runner_stream_replaces_only_coordinator_prose(review, monkeypatch, coordinator):
+    from pathlib import Path
+
+    from omnigent.runner import create_runner_app
+    from omnigent.spec import load
+    from omnigent.spec.types import AgentSpec
+    from tests.runner.conftest import (
+        _FakeProcessManager,
+        _runner_client,
+        _ScriptedHarnessClient,
+        _sse,
+    )
+    from tests.runner.helpers import NullServerClient
+
+    ledger, *_ = review
+    monkeypatch.setattr("omnigent.process_logging.data_dir", lambda: ledger.path.parent.parent)
+    spec = (
+        load(Path(__file__).resolve().parents[2] / "examples/egm")
+        if coordinator
+        else AgentSpec(spec_version=1, name="ordinary-agent")
+    )
+    fabricated = "UNSUPPORTED_READY: implement immediately"
+    message = {
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": fabricated}],
+    }
+    frames = [
+        {"type": "response.created", "response": {"id": "resp_test"}},
+        {"type": "response.output_text.delta", "delta": fabricated},
+        {"type": "response.output_text.done", "text": fabricated},
+        {"type": "response.output_item.done", "item": message},
+        {
+            "type": "response.output_item.done",
+            "item": {
+                "type": "function_call_output",
+                "call_id": "prior_tool",
+                "output": "tool evidence unchanged",
+            },
+        },
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_test",
+                "output": [message],
+                "output_text": fabricated,
+                "usage": {"total_tokens": 42},
+            },
+        },
+    ]
+    harness = _ScriptedHarnessClient([_sse(frame) for frame in frames])
+
+    async def resolver(_agent_id, _session_id=None):
+        return spec
+
+    app = create_runner_app(
+        process_manager=_FakeProcessManager(harness),
+        spec_resolver=resolver,
+        server_client=NullServerClient(),
+        runner_workspace=ledger.workspace,
+    )
+    async with _runner_client(app) as client:
+        response = await client.post(
+            "/v1/sessions/root/events?stream=true",
+            json={
+                "type": "message",
+                "role": "user",
+                "agent_id": "test-agent",
+                "harness": "claude-sdk",
+                "content": [{"type": "input_text", "text": "review"}],
+            },
+        )
+    assert response.status_code == 200, response.text
+    assert "tool evidence unchanged" in response.text
+    events = [
+        json.loads(line[5:]) for line in response.text.splitlines() if line.startswith("data:")
+    ]
+    terminal = next(event for event in events if event["type"] == "response.completed")
+    assert terminal["response"]["usage"] == {"total_tokens": 42}
+    if coordinator:
+        from omnigent.runner.app import _session_histories_ref
+
+        assert fabricated not in response.text
+        assert "Runtime ready=false" in response.text
+        histories = _session_histories_ref["root"]
+        assert fabricated not in json.dumps(histories)
+    else:
+        assert fabricated in response.text
