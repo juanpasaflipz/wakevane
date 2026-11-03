@@ -285,7 +285,13 @@ class ModalSandboxLauncher(SandboxLauncher):
     # path, so the App OAuth flow is unsupported (use --no-auth).
     supports_local_port_forward: ClassVar[bool] = False
 
-    def __init__(self, *, image: str | None = None, secrets: Sequence[str] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        image: str | None = None,
+        secrets: Sequence[str] | None = None,
+        runtime: str | None = None,
+    ) -> None:
         """
         Initialize the launcher.
 
@@ -300,8 +306,13 @@ class ModalSandboxLauncher(SandboxLauncher):
             the server's managed-host ``sandbox.modal.secrets`` config.
             ``None`` resolves :data:`SANDBOX_SECRETS_ENV_VAR`
             (comma-separated) and falls back to no injected secrets.
+        :param runtime: Modal sandbox runtime, ``"gvisor"`` or ``"vm"`` —
+            the server's ``sandbox.modal.runtime`` config. ``"vm"`` gives the
+            sandbox its own kernel, which namespace sandboxes like bwrap need.
+            ``None`` keeps Modal's default.
         """
         self._image_ref = image
+        self._runtime = runtime
         self._secret_names = tuple(secrets) if secrets is not None else None
         self._sandboxes: dict[str, modal.Sandbox] = {}
 
@@ -392,6 +403,7 @@ class ModalSandboxLauncher(SandboxLauncher):
             # keys / gateway URLs) injected from named Modal secrets;
             # None keeps the SDK default when nothing is configured.
             secrets=secrets or None,
+            **({"runtime": self._runtime} if self._runtime is not None else {}),
         )
         handle.set_tags({"omnigent-name": name})
         sandbox_id = str(handle.object_id)
