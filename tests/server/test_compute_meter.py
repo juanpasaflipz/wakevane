@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -44,6 +45,14 @@ class _Sessions:
 
     def __init__(self) -> None:
         self.runner_last_seen: int | None = None
+        self.live_status: str | None = "running"
+        self.updated_at = _START
+
+    def get_conversations(self, ids: list[str]) -> dict[str, Any]:
+        return {
+            session_id: SimpleNamespace(live_status=self.live_status, updated_at=self.updated_at)
+            for session_id in ids
+        }
 
     def list_host_conversation_ids(
         self, host_id: str, *, after: str | None = None, limit: int = 32
@@ -188,6 +197,36 @@ def test_deadline_stops_a_busy_generation(db_uri: str) -> None:
     assert env["meter"].sweep_once() == 1
     assert env["meter"].store.get(usage.id).end_reason == "deadline"
     assert env["launcher"].terminated == ["sb-1"]
+
+
+@pytest.mark.parametrize("status", ["idle", "failed"])
+def test_finished_turn_heartbeats_do_not_hold_trial_slot(db_uri: str, status: str) -> None:
+    env = _meter(db_uri, funding="trial", limits=MeteringLimits(idle_shutdown_s=900))
+    _grant(env)
+    charge = _reserve(env, "root-1")
+    env["meter"].record_start(owner="owner", host_id=_HOST, trial_charge_id=charge.id)
+    env["sessions"].live_status = status
+    env["sessions"].updated_at = _START + 60
+    env["clock"].now = _START + 959
+    env["sessions"].runner_last_seen = env["clock"].now
+    assert env["meter"].sweep_once() == 0
+    env["clock"].now += 1
+    env["sessions"].runner_last_seen = env["clock"].now
+    assert env["meter"].sweep_once() == 1
+    assert env["launcher"].terminated == ["sb-1"]
+    assert env["trial_store"].get_grant("owner").reserved_micros == 0
+    assert _reserve(env, "root-2").status == "reserved"
+
+
+@pytest.mark.parametrize("status", ["running", "waiting", None])
+def test_unfinished_turn_heartbeats_keep_sandbox_alive(db_uri: str, status: str | None) -> None:
+    env = _meter(db_uri, funding="trial", limits=MeteringLimits(idle_shutdown_s=900))
+    env["meter"].record_start(owner="owner", host_id=_HOST)
+    env["sessions"].live_status = status
+    env["clock"].now = _START + 1800
+    env["sessions"].runner_last_seen = env["clock"].now
+    assert env["meter"].sweep_once() == 0
+    assert env["launcher"].terminated == []
 
 
 def test_replaced_generation_is_closed_without_terminating_the_new_one(db_uri: str) -> None:

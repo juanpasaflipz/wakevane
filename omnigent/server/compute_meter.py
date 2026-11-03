@@ -157,8 +157,16 @@ class ComputeMeter:
             )
             if not ids:
                 return latest
-            for connectivity in self._conversation_store.get_session_connectivity(ids).values():
-                seen = connectivity.runner_last_seen
+            conversations = self._conversation_store.get_conversations(ids)
+            for session_id, connectivity in self._conversation_store.get_session_connectivity(
+                ids
+            ).items():
+                conversation = conversations.get(session_id)
+                seen = conversation.updated_at if conversation is not None else None
+                # Heartbeats protect active/unknown turns, but idle and failed
+                # sessions must age out even while their tunnels stay connected.
+                if conversation is None or conversation.live_status not in {"idle", "failed"}:
+                    seen = max(seen or 0, connectivity.runner_last_seen or 0) or None
                 if seen is not None and (latest is None or seen > latest):
                     latest = seen
             if len(ids) < _HOST_SESSION_PAGE:

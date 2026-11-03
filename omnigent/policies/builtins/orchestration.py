@@ -685,9 +685,41 @@ def read_only_os(
     return _evaluate
 
 
+def egm_review_protocol():
+    """Opt into the runner ledger and reject unstructured packets before dispatch."""
+
+    def evaluate(event):
+        args = _tool_call(event, {"sys_session_send"})
+        if args is not None:
+            from omnigent.runner.egm_review import parse_packet
+
+            try:
+                if set(args) != {"agent", "title", "args"} or args["agent"] != "goldfish":
+                    raise ValueError("Fresh named Goldfish required")
+                child = args["args"]
+                if set(child) != {"purpose", "input"} or child["purpose"] != "review":
+                    raise ValueError("Only purpose and generated packet are allowed")
+                parse_packet(child["input"])
+            except (ValueError, TypeError, KeyError):
+                return _decision(
+                    "DENY",
+                    "Use the JSON packet returned by sys_egm_review; "
+                    "no review prompts, verdicts or extra fields.",
+                )
+        return _ALLOW
+
+    return evaluate
+
+
 # ── Registry ─────────────────────────────────────────────────────────────────
 
 POLICY_REGISTRY: list[dict[str, object]] = [
+    {
+        "handler": "omnigent.policies.builtins.orchestration.egm_review_protocol",
+        "kind": "factory",
+        "name": "Enforce Design Review Protocol",
+        "description": "Enable frozen artifacts, validated packets and runner-computed readiness.",
+    },
     {
         "handler": "omnigent.policies.builtins.orchestration.blast_radius",
         "kind": "factory",

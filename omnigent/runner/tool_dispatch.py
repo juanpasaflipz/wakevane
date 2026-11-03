@@ -492,6 +492,7 @@ _NATIVE_RELAY_BUILTIN_TOOLS = (
     | _SESSION_SELF_WRITE_TOOLS
     | _ASYNC_INBOX_TOOLS
     | _SUBAGENT_TOOLS
+    | {"sys_egm_review"}
     | _LIST_MODELS_TOOLS
     | _ADVISE_MODELS_TOOLS
     | _SESSION_CREATE_TOOLS
@@ -883,6 +884,7 @@ _ALL_LOCAL_TOOLS = (
     | _TERMINAL_TOOLS
     | _ASYNC_INBOX_TOOLS
     | _SUBAGENT_TOOLS
+    | {"sys_egm_review"}
     | _LIST_MODELS_TOOLS
     | _ADVISE_MODELS_TOOLS
     | _SESSION_CREATE_TOOLS
@@ -6709,7 +6711,36 @@ async def execute_tool(
                 "use sys_os_* tools and an inherited terminal for filesystem operations"
             }
         )
+    review_ledger = None
+    review_title = None
     try:
+        from omnigent.runner.egm_review import ReviewLedger
+        from omnigent.runner.egm_review import enabled as egm_enabled
+
+        if egm_enabled(agent_spec) and tool_name in {"sys_egm_review", "sys_session_send"}:
+            os_spec = _effective_runner_os_env_spec(agent_spec, conversation_id, runner_workspace)
+            if not conversation_id or not os_spec.cwd:
+                raise ValueError("Design review requires session and workspace")
+            review_ledger = ReviewLedger(conversation_id, Path(os_spec.cwd))
+            if tool_name == "sys_egm_review":
+                if args == {"action": "status"}:
+                    return json.dumps(await asyncio.to_thread(review_ledger.status))
+                if (
+                    set(args) != {"action", "spec_path", "contract_path", "evidence_paths"}
+                    or args["action"] != "freeze"
+                ):
+                    raise ValueError(
+                        "Expected freeze paths or status; reports cannot be submitted"
+                    )
+                return json.dumps(
+                    await asyncio.to_thread(
+                        review_ledger.freeze,
+                        args["spec_path"],
+                        args["contract_path"],
+                        args["evidence_paths"],
+                    )
+                )
+            review_title = await asyncio.to_thread(review_ledger.reserve, args)
         if mcp_manager is not None:
             # All MCP tool calls are routed through the AP server's
             # /mcp endpoint, which enforces TOOL_CALL and TOOL_RESULT
@@ -6961,6 +6992,8 @@ async def execute_tool(
         )
         output = f"Error: {type(exc).__name__}: {exc}"
 
+    if review_ledger is not None and review_title is not None:
+        await asyncio.to_thread(review_ledger.bind, review_title, output)
     if conversation_id and tool_name == "sys_os_shell":
         from omnigent.runner.pr_observer import observe_tool_completion
 
@@ -7980,6 +8013,7 @@ async def _execute_async_inbox_tool(
             session_inbox,
             server_client=server_client,
             conversation_id=conversation_id,
+            review_ledger=_review_ledger_for_inbox(agent_spec, conversation_id, runner_workspace),
         )
 
     if tool_name == SysCallAsyncTool.name():
@@ -8377,11 +8411,23 @@ async def _cleanup_drained_subagent_work(
         await _record_subagent_receipt(server_client, child_id, work_id)
 
 
+def _review_ledger_for_inbox(agent_spec, conversation_id, runner_workspace):
+    from omnigent.runner.egm_review import ReviewLedger, enabled
+
+    if not enabled(agent_spec):
+        return None
+    os_spec = _effective_runner_os_env_spec(agent_spec, conversation_id, runner_workspace)
+    if not conversation_id or not os_spec.cwd:
+        raise ValueError("Design review requires session and workspace")
+    return ReviewLedger(conversation_id, Path(os_spec.cwd))
+
+
 async def _drain_inbox(
     inbox: asyncio.Queue[_JsonObject] | None,
     *,
     server_client: httpx.AsyncClient | None = None,
     conversation_id: str | None = None,
+    review_ledger=None,
 ) -> str:
     """
     Non-blocking drain of the per-session inbox queue.
@@ -8421,6 +8467,14 @@ async def _drain_inbox(
             server_client=server_client,
             conversation_id=conversation_id,
         )
+        if review_ledger is not None and not evaluation.retry_original:
+            try:
+                await asyncio.to_thread(review_ledger.record, evaluation.payload)
+            except Exception:
+                _logger.exception("Could not persist Design review result")
+                retry_payloads.append(payload)
+                items.append("Design review result could not be persisted; retry sys_read_inbox.")
+                continue
         items.append(_format_async_task_item(evaluation.payload))
         if evaluation.retry_original:
             retry_payloads.append(payload)

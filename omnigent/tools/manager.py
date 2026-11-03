@@ -161,6 +161,12 @@ class ToolManager:
         self._os_env: OSEnvironment | None = None
         self._register_skill_tools()
         self._register_builtin_tools()
+        from omnigent.runner.egm_review import enabled as egm_enabled
+
+        if egm_enabled(spec):
+            from omnigent.tools.builtins.egm_review import EgmReviewTool
+
+            self._tools[EgmReviewTool.name()] = EgmReviewTool()
         self._register_sub_agent_tools()
         self._register_session_tools()
         self._register_agent_mgmt_tools()
