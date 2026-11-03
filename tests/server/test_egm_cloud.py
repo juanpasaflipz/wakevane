@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from omnigent.errors import OmnigentError
 from omnigent.server.egm_cloud import (
+    _PROBE_SOURCE,
+    OUTPUT_DIR,
     CloudReviewError,
     CloudReviewTarget,
     checkout_command,
@@ -140,3 +144,81 @@ def test_cloud_review_workspace_rejects_several_repositories() -> None:
     )
     with pytest.raises(OmnigentError, match="exactly one repository"):
         cloud_review_workspace(body)
+
+
+_FAKE_BWRAP = """
+import os
+
+
+class BwrapSandboxBackend:
+    def resolve(self, spec, workspace):
+        return None
+
+    def wrap_launcher_argv(self, argv, policy, workspace):
+        mode = os.environ["PROBE_MODE"]
+        private = os.environ["PROBE_PRIVATE_DIR"]
+        # argv: python, -c, check, inside, root, home
+        keep = {"unconfined": 3, "private": 1, "blocked": 0}[mode]
+        paths = [
+            path if index < keep else os.path.join(private, str(index))
+            for index, path in enumerate(argv[3:])
+        ]
+        return [*argv[:3], *paths]
+"""
+
+_FAKE_DATAMODEL = """
+class OSEnvSandboxSpec:
+    def __init__(self, **fields):
+        self.fields = fields
+
+
+class OSEnvSpec(OSEnvSandboxSpec):
+    pass
+"""
+
+
+@pytest.mark.parametrize(
+    ("mode", "confined"),
+    [
+        pytest.param("unconfined", False, id="writes-escape"),
+        pytest.param("private", True, id="writes-stay-in-private-mounts"),
+        pytest.param("blocked", False, id="output-dir-not-writable"),
+    ],
+)
+def test_probe_counts_only_writes_that_reach_the_real_filesystem(
+    tmp_path: Path, mode: str, confined: bool
+) -> None:
+    fake = tmp_path / "fake"
+    (fake / "omnigent" / "inner").mkdir(parents=True)
+    (fake / "omnigent" / "__init__.py").write_text("")
+    (fake / "omnigent" / "inner" / "__init__.py").write_text("")
+    (fake / "omnigent" / "inner" / "bwrap_sandbox.py").write_text(_FAKE_BWRAP)
+    (fake / "omnigent" / "inner" / "datamodel.py").write_text(_FAKE_DATAMODEL)
+    workspace, home, private = tmp_path / "repo", tmp_path / "home", tmp_path / "private"
+    for directory in (workspace / OUTPUT_DIR, home, private):
+        directory.mkdir(parents=True)
+
+    completed = subprocess.run(
+        # -S and a neutral cwd keep the real omnigent off sys.path so the fakes load.
+        [sys.executable, "-S", "-c", _PROBE_SOURCE, str(workspace), OUTPUT_DIR],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": os.environ["PATH"],
+            "PYTHONPATH": str(fake),
+            "HOME": str(home),
+            "PROBE_MODE": mode,
+            "PROBE_PRIVATE_DIR": str(private),
+        },
+        check=True,
+    )
+    report = json.loads(completed.stdout.strip().splitlines()[-1])
+    assert report["home_path"] == str(home)
+    # Probe files are cleaned up on the real filesystem either way.
+    assert not any(path.name == ".wakevane-probe" for path in tmp_path.rglob("*"))
+    if confined:
+        evaluate_probe(completed.stdout)
+    else:
+        with pytest.raises(CloudReviewError, match="could not confine"):
+            evaluate_probe(completed.stdout)
