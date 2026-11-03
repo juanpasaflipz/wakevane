@@ -29,7 +29,9 @@ _SHA = re.compile(r"[0-9a-f]{40}")
 _LS_REMOTE_TIMEOUT_S = 30.0
 
 # Runs inside the sandbox with the image's own omnigent package, so it proves the
-# exact bwrap policy the reviewers get: writes allowed only under OUTPUT_DIR.
+# exact bwrap policy the reviewers get. A confined write counts only if it reaches
+# the real filesystem, checked from outside bwrap: bwrap's private root and /tmp
+# accept writes that vanish when the command exits.
 _PROBE_SOURCE = r"""
 import json, os, subprocess, sys
 from pathlib import Path
@@ -38,6 +40,13 @@ from omnigent.inner.datamodel import OSEnvSandboxSpec, OSEnvSpec
 
 workspace = Path(sys.argv[1]).resolve()
 output = sys.argv[2]
+targets = {
+    "inside": workspace / output / ".wakevane-probe",
+    "root": workspace / ".wakevane-probe",
+    "home": Path(os.path.expanduser("~")) / ".wakevane-probe",
+}
+for path in targets.values():
+    path.unlink(missing_ok=True)
 backend = BwrapSandboxBackend()
 policy = backend.resolve(
     OSEnvSpec(
@@ -47,29 +56,24 @@ policy = backend.resolve(
     workspace,
 )
 check = (
-    "import json, os, sys\n"
-    "def attempt(path):\n"
+    "import sys\n"
+    "for path in sys.argv[1:]:\n"
     "    try:\n"
     "        with open(path, 'w') as handle:\n"
     "            handle.write('probe')\n"
-    "        os.remove(path)\n"
-    "        return True\n"
     "    except OSError:\n"
-    "        return False\n"
-    "print(json.dumps({'inside': attempt(sys.argv[1]), 'root': attempt(sys.argv[2]),"
-    " 'home': attempt(sys.argv[3])}))\n"
+    "        pass\n"
 )
 argv = backend.wrap_launcher_argv(
-    [sys.executable, "-c", check,
-     str(workspace / output / ".wakevane-probe"),
-     str(workspace / ".wakevane-probe"),
-     os.path.expanduser("~/.wakevane-probe")],
+    [sys.executable, "-c", check, *(str(path) for path in targets.values())],
     policy,
     workspace,
 )
 completed = subprocess.run(argv, capture_output=True, text=True, timeout=60, check=False)
-lines = completed.stdout.strip().splitlines()
-result = json.loads(lines[-1]) if completed.returncode == 0 and lines else {}
+result = {name: path.exists() for name, path in targets.items()}
+for path in targets.values():
+    path.unlink(missing_ok=True)
+result["home_path"] = str(targets["home"].parent)
 result["exit_code"] = completed.returncode
 result["stderr"] = completed.stderr[-300:]
 print(json.dumps(result))
