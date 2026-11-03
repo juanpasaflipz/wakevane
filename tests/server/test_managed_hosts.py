@@ -4429,6 +4429,33 @@ def test_parse_modal_secrets_thread_to_launcher(monkeypatch: pytest.MonkeyPatch)
     assert fake.image is None
 
 
+@pytest.mark.parametrize("runtime", ["vm", "gvisor", None])
+def test_parse_modal_runtime_threads_to_launcher(
+    monkeypatch: pytest.MonkeyPatch, runtime: str | None
+) -> None:
+    modal_section = {} if runtime is None else {"runtime": runtime}
+    cfg = parse_sandbox_config(
+        {"provider": "modal", "server_url": "https://s.example.com", "modal": modal_section}
+    )
+    assert cfg is not None
+    fake = FakeSandboxLauncher()
+    install_fake_modal_launcher(monkeypatch, fake)
+    assert cfg.default.launcher_factory() is fake
+    assert fake.runtime == runtime
+
+
+@pytest.mark.parametrize("runtime", ["firecracker", 1, ""])
+def test_parse_modal_runtime_rejects_unknown_values(runtime: object) -> None:
+    with pytest.raises(ValueError, match=r"sandbox\.modal\.runtime"):
+        parse_sandbox_config(
+            {
+                "provider": "modal",
+                "server_url": "https://s.example.com",
+                "modal": {"runtime": runtime},
+            }
+        )
+
+
 @pytest.mark.parametrize(
     "secrets",
     [

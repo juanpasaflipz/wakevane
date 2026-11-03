@@ -87,6 +87,7 @@ class _CreateCall:
     :param memory: Requested memory in MiB.
     :param secrets: Workload secrets passed, or ``None`` when no
         sandbox env injection was configured.
+    :param runtime: Runtime passed, or ``None`` when the SDK default applies.
     """
 
     entrypoint: list[str]
@@ -96,6 +97,7 @@ class _CreateCall:
     cpu: float
     memory: int
     secrets: list[_FakeSecret] | None
+    runtime: str | None = None
 
 
 class _FakeStream:
@@ -273,6 +275,7 @@ def _install_fake_modal(monkeypatch: pytest.MonkeyPatch) -> _FakeModalState:
             cpu: float,
             memory: int,
             secrets: list[_FakeSecret] | None = None,
+            runtime: str | None = None,
         ) -> _FakeSandbox:
             """Record creation and register the new sandbox."""
             state.create_calls.append(
@@ -284,6 +287,7 @@ def _install_fake_modal(monkeypatch: pytest.MonkeyPatch) -> _FakeModalState:
                     cpu=cpu,
                     memory=memory,
                     secrets=secrets,
+                    runtime=runtime,
                 )
             )
             sandbox = _FakeSandbox(f"sb-new-{len(state.create_calls)}")
@@ -710,6 +714,15 @@ def test_provision_injects_configured_sandbox_secrets(
         _FakeSecret(name="omnigent-llm"),
         _FakeSecret(name="gateway-extras"),
     ]
+
+
+@pytest.mark.parametrize("runtime", [None, "vm", "gvisor"])
+def test_provision_passes_configured_runtime(
+    monkeypatch: pytest.MonkeyPatch, runtime: str | None
+) -> None:
+    state = _install_fake_modal(monkeypatch)
+    ModalSandboxLauncher(runtime=runtime).provision("my-host")
+    assert state.create_calls[0].runtime == runtime
 
 
 def test_provision_resolves_sandbox_secrets_env_var(

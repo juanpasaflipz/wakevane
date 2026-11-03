@@ -1148,6 +1148,7 @@ def parse_repo_workspace(workspace: str) -> RepoWorkspace:
 def _modal_launcher_factory(
     image: str | None,
     secrets: list[str] | None,
+    runtime: str | None = None,
 ) -> Callable[[], SandboxHostLauncher]:
     """
     Build the launcher factory for the YAML ``provider: modal`` path.
@@ -1160,6 +1161,8 @@ def _modal_launcher_factory(
         credentials, gateway URLs) are injected into every sandbox,
         e.g. ``["omnigent-llm"]``, or ``None`` to resolve from the
         launcher's env-var fallback / inject nothing.
+    :param runtime: Modal sandbox runtime (``"gvisor"`` / ``"vm"``), or
+        ``None`` for Modal's default.
     :returns: A factory producing parameterized Modal launchers.
     """
 
@@ -1167,7 +1170,7 @@ def _modal_launcher_factory(
         """Construct the Modal launcher (lazy SDK import inside)."""
         from omnigent.onboarding.sandboxes.modal import ModalSandboxLauncher
 
-        return ModalSandboxLauncher(image=image, secrets=secrets)
+        return ModalSandboxLauncher(image=image, secrets=secrets, runtime=runtime)
 
     return _build
 
@@ -1680,7 +1683,7 @@ def _parse_single_provider_sandbox_config(raw: dict[str, object]) -> ManagedSand
         host_config = _apply_keep_warm(host_config, _parse_keep_warm_s(raw))
     if provider == "modal":
         launcher_factory = _modal_launcher_factory(
-            _parse_modal_image(raw), _parse_modal_secrets(raw)
+            _parse_modal_image(raw), _parse_modal_secrets(raw), _parse_modal_runtime(raw)
         )
         token_ttl_s = MODAL_MANAGED_TOKEN_TTL_S
     elif provider == "daytona":
@@ -2029,6 +2032,36 @@ def _parse_modal_secrets(raw: dict[str, object]) -> list[str] | None:
             "secret names, e.g. ['omnigent-llm']"
         )
     return [name.strip() for name in secrets]
+
+
+MODAL_RUNTIMES = frozenset({"gvisor", "vm"})
+
+
+def _parse_modal_runtime(raw: dict[str, object]) -> str | None:
+    """
+    Extract and validate ``sandbox.modal.runtime`` from the ``sandbox`` dict.
+
+    ``vm`` runs each sandbox with its own kernel, which bwrap-confined
+    workloads (cloud Design review) need; gVisor refuses new namespaces.
+
+    :param raw: The raw ``sandbox`` mapping (provider already ``"modal"``).
+    :returns: ``"gvisor"`` or ``"vm"``, or ``None`` when not configured.
+    :raises ValueError: When the value is not a known runtime.
+    """
+    modal_raw = raw.get("modal")
+    if modal_raw is None:
+        return None
+    if not isinstance(modal_raw, dict):
+        raise ValueError("server config 'sandbox.modal' must be a mapping")
+    runtime = modal_raw.get("runtime")
+    if runtime is None:
+        return None
+    if runtime not in MODAL_RUNTIMES:
+        raise ValueError(
+            "server config 'sandbox.modal.runtime' must be one of: "
+            f"{', '.join(sorted(MODAL_RUNTIMES))} (got {runtime!r})"
+        )
+    return str(runtime)
 
 
 def _daytona_launcher_factory(

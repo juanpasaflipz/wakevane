@@ -191,6 +191,7 @@ class FakeSandboxLauncher(SandboxLauncher):
         self.image: str | None = None
         self.template: str | None = None
         self.secrets: list[str] | None = None
+        self.runtime: str | None = None
         self.env: list[str] | None = None
         self.region: str | None = None
         self.ttl: str | None = None
@@ -349,11 +350,15 @@ def install_fake_modal_launcher(
     import omnigent.onboarding.sandboxes.modal as modal_mod
 
     def _ctor(
-        *, image: str | None = None, secrets: list[str] | None = None
+        *,
+        image: str | None = None,
+        secrets: list[str] | None = None,
+        runtime: str | None = None,
     ) -> FakeSandboxLauncher:
         """Stand-in constructor recording the construction wiring."""
         fake.image = image
         fake.secrets = secrets
+        fake.runtime = runtime
         return fake
 
     monkeypatch.setattr(modal_mod, "ModalSandboxLauncher", _ctor)
