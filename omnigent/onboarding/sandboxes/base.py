@@ -333,6 +333,29 @@ elif previous:
 """
 
 
+# Host config key holding environment for the ``omnigent host`` process
+# itself, e.g. a short-lived trial gateway token. Never written to disk.
+HOST_LAUNCH_ENV_KEY = "launch_env"
+
+
+def split_launch_env(
+    host_config: dict[str, object] | None,
+) -> tuple[dict[str, object] | None, dict[str, str]]:
+    """Separate the launch-only environment from the config written to disk.
+
+    :param host_config: The host config for this launch, or ``None``.
+    :returns: The config without :data:`HOST_LAUNCH_ENV_KEY` and the
+        environment entries it carried (empty when none).
+    """
+    if not host_config or HOST_LAUNCH_ENV_KEY not in host_config:
+        return host_config, {}
+    remainder = {key: value for key, value in host_config.items() if key != HOST_LAUNCH_ENV_KEY}
+    raw_env = host_config[HOST_LAUNCH_ENV_KEY]
+    if not isinstance(raw_env, dict):
+        raise ValueError(f"host config '{HOST_LAUNCH_ENV_KEY}' must be a mapping")
+    return remainder, {str(key): str(value) for key, value in raw_env.items()}
+
+
 def render_host_config_write_command(host_config: dict[str, object]) -> str:
     """
     Build the remote command that installs *host_config* into the
@@ -375,7 +398,9 @@ def render_host_config_write_command(host_config: dict[str, object]) -> str:
     :returns: A ``python3 -c '<script>'`` shell command, safe to pass to
         :meth:`SandboxLauncher.run` or embed in a larger shell script.
     """
-    payload = base64.b64encode(json.dumps(host_config).encode()).decode()
+    # Launch-only environment (credentials) must never reach the config file.
+    on_disk, _ = split_launch_env(host_config)
+    payload = base64.b64encode(json.dumps(on_disk or {}).encode()).decode()
     script = _HOST_CONFIG_WRITE_SCRIPT.replace("__PAYLOAD__", repr(payload))
     return f"python3 -c {shlex.quote(script)}"
 
@@ -1051,11 +1076,13 @@ class ExecModelHostLauncher(SandboxHostLauncher, SandboxExecTransport):
         workspace = self.prepare_workspace(sandbox_id, repos=repos, on_stage=on_stage)
         if on_stage is not None:
             on_stage("starting")
+        host_config, launch_env = split_launch_env(host_config)
         if host_config is not None or self.capabilities.resume_stopped:
             self.run(sandbox_id, render_host_config_write_command(host_config or {}))
         env_prefix = " ".join(
             f"{key}={shlex.quote(value)}"
             for key, value in (
+                *launch_env.items(),
                 (HOST_TOKEN_ENV_VAR, token),
                 (HOST_ID_ENV_VAR, host_id),
                 (HOST_NAME_ENV_VAR, host_name),
@@ -1069,7 +1096,8 @@ class ExecModelHostLauncher(SandboxHostLauncher, SandboxExecTransport):
         except click.ClickException as exc:
             # Provider errors echo the failed command, and this one carries the token.
             # Redact in place so subclasses such as SandboxGoneError keep their type.
-            exc.message = exc.message.replace(token, "[redacted]")  # type: ignore[read-only]
+            for secret in (token, *launch_env.values()):
+                exc.message = exc.message.replace(secret, "[redacted]")  # type: ignore[read-only]
             exc.args = (exc.message,)
             raise exc from None
         return workspace

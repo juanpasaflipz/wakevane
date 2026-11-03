@@ -23,6 +23,7 @@ import yaml
 
 from omnigent.host import HOST_FATAL_EXIT_CODE
 from omnigent.onboarding.sandboxes.base import (
+    HOST_LAUNCH_ENV_KEY,
     RemoteCommandResult,
     SandboxGoneError,
     SandboxLauncher,
@@ -212,6 +213,28 @@ def test_start_host_env_prefix_is_honored_by_a_real_shell() -> None:
         ["sh", "-c", probe], capture_output=True, text=True, check=True
     ).stdout.strip()
     assert out == "tok-123:host_abc:managed-abc"
+
+
+def test_start_host_delivers_launch_env_without_writing_it_to_config() -> None:
+    """Launch-only env reaches the host process but never the config file."""
+    launcher = _RecordingLauncher()
+    launcher.start_host(
+        "sb-1",
+        token="tok-123",
+        host_id="host_abc",
+        host_name="managed-abc",
+        server_url="https://srv",
+        host_config={"providers": {}, HOST_LAUNCH_ENV_KEY: {"TRIAL_TOKEN": "secret-xyz"}},
+    )
+    [raw] = launcher.backgrounded
+    probe = raw.replace("omnigent host --server https://srv", "sh -c 'printf %s \"$TRIAL_TOKEN\"'")
+    out = subprocess.run(["sh", "-c", probe], capture_output=True, text=True, check=True)
+    assert out.stdout.strip() == "secret-xyz"
+    written = [command for command in launcher.commands if "python3 -c" in command]
+    assert written and not any("secret-xyz" in command for command in written)
+    assert render_host_config_write_command(
+        {HOST_LAUNCH_ENV_KEY: {"TRIAL_TOKEN": "secret-xyz"}}
+    ) == render_host_config_write_command({})
 
 
 @pytest.mark.parametrize("error_type", [click.ClickException, SandboxGoneError])
