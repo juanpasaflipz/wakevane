@@ -403,6 +403,8 @@ async def test_trial_target_launch_admission(trial: dict[str, Any]) -> None:
 
 async def test_trial_launch_arms_a_scoped_gateway_credential(trial: dict[str, Any]) -> None:
     from omnigent.inference_config import parse_inference_config
+    from omnigent.onboarding.provider_config import provider_credential_env_vars
+    from omnigent.onboarding.sandboxes.base import split_launch_env
     from omnigent.server.funded_trial import (
         TRIAL_PROVIDER,
         bind_trial_inference,
@@ -433,9 +435,17 @@ async def test_trial_launch_arms_a_scoped_gateway_credential(trial: dict[str, An
         launch_id="1",
     )
     assert launched.charge is not None and launched.charge.status == "reserved"
-    token = launched.deployment.default.host_config["providers"][TRIAL_PROVIDER]["anthropic"][
-        "api_key"
+    launch_config = launched.deployment.default.host_config
+    # The token rides launch-only env; the config file keeps the env reference,
+    # which the host forwards to its runners.
+    on_disk, launch_env = split_launch_env(launch_config)
+    assert on_disk == catalog_config
+    assert sorted(provider_credential_env_vars(on_disk)) == [
+        "OMNIGENT_WAKEVANE_TRIAL_GATEWAY_TOKEN",
+        "WAKEVANE_TRIAL_GATEWAY_TOKEN",
     ]
+    token = launch_env["WAKEVANE_TRIAL_GATEWAY_TOKEN"]
+    assert token not in json.dumps(on_disk)
     assert deployment.default.host_config == catalog_config  # shared config is untouched
     claims = trial["policy"].verify_gateway_token(token)
     assert (claims.user_id, claims.root_session_id) == ("owner", "root-1")

@@ -500,11 +500,14 @@ def bind_trial_inference(deployment: Any, policy: FundedTrialPolicy) -> None:
 
 
 def with_gateway_token(deployment: Any, token: str) -> Any:
-    """Copy of *deployment* whose trial targets carry *token* as the gateway key.
+    """Copy of *deployment* whose trial targets launch with *token* in the host env.
 
-    The token is written into the sandbox's own host config only; it never
-    enters the persisted snapshot, which keeps the placeholder reference.
+    The host config keeps the placeholder reference, which the host forwards to
+    its runners, and the token travels as launch-only environment. It is never
+    written to the sandbox config file or the persisted session snapshot.
     """
+    from omnigent.onboarding.sandboxes.base import HOST_LAUNCH_ENV_KEY
+
     configs = []
     for target in deployment.configs:
         provider = ((target.host_config or {}).get("providers") or {}).get(TRIAL_PROVIDER)
@@ -512,10 +515,7 @@ def with_gateway_token(deployment: Any, token: str) -> Any:
             configs.append(target)
             continue
         host_config = copy.deepcopy(target.host_config)
-        family = dict(host_config["providers"][TRIAL_PROVIDER]["anthropic"])
-        family.pop("api_key_ref", None)
-        family["api_key"] = token
-        host_config["providers"][TRIAL_PROVIDER]["anthropic"] = family
+        host_config[HOST_LAUNCH_ENV_KEY] = {_TOKEN_REF.removeprefix("env:"): token}
         configs.append(replace(target, host_config=host_config))
     return replace(deployment, configs=tuple(configs))
 
