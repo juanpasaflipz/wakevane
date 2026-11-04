@@ -61,25 +61,26 @@ prompt: |
   Your final message is parsed mechanically. It must be ONLY the YAML report
   below, optionally wrapped in one ```yaml fence: no greeting, heading, prose
   or --- separator before or after it. Anything else fails the review.
+  Double-quote every free-text value as shown, escaping inner quotes as \".
     stage: comprehension | critic | readiness
     spec_sha256: <hash actually computed, or unknown>
     contract_sha256: <hash actually computed, or unknown>
     source_revision: <HEAD actually observed, or unknown>
     verdict: pass | revise | blocked
-    summary: <your independent understanding>
+    summary: "<your independent understanding>"
     findings:
       - id: <stage-N>
         severity: blocking | nonblocking
         kind: behavior | acceptance | editorial
-        evidence: <spec section and/or actual file:line>
-        problem: <specific gap>
-        requested_change: <what would resolve it>
+        evidence: "<spec section and/or actual file:line>"
+        problem: "<specific gap>"
+        requested_change: "<what would resolve it>"
     requirement_checks:
       - id: <contract ID>
         status: satisfied | violated | unknown
-        source_quote: <exact original requirement wording>
-        evidence: <spec section and repository file:line where applicable>
-        explanation: <why this evidence meets the original wording>
+        source_quote: "<exact original requirement wording>"
+        evidence: "<spec section and repository file:line where applicable>"
+        explanation: "<why this evidence meets the original wording>"
     execution_status: not_run
     limitations: []
   Classify each finding's kind honestly: behavior or acceptance corrections

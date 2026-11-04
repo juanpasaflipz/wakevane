@@ -98,7 +98,7 @@ def test_ready_requires_three_bound_reports_and_survives_restart(review):
     ledger, packet, *_ = review
     for stage, wrapper in (
         ("comprehension", "{}"),
-        ("critic", "```yaml\n{}```"),
+        ("critic", "Here is my report:\n\n```yaml\n{}```\n"),
         ("readiness", "{}"),
     ):
         assert not ledger.status()["ready"]
@@ -167,6 +167,7 @@ def test_changed_inputs_invalidate_ready(review, artifact):
         "executed",
         "malformed",
         "prose_wrapped",
+        "two_fences",
         "failed",
         "cancelled",
     ],
@@ -204,6 +205,8 @@ def test_false_pass_cannot_advance(review, fault):
         value = "PASS"
     elif fault == "prose_wrapped":
         wrapper = "I reviewed the packet.\n\n---\n\n{}"
+    elif fault == "two_fences":
+        wrapper = "```yaml\n{0}```\nRevised:\n```yaml\n{0}```"
     else:
         status = fault
     complete(ledger, child, value, status, wrapper=wrapper)

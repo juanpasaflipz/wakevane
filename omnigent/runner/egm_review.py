@@ -48,6 +48,20 @@ def _yaml(text: str):
     return yaml.load(text, Loader=_UniqueYamlLoader)
 
 
+_YAML_FENCE = re.compile(r"^```yaml\n(.*?)^```[ \t]*$", re.MULTILINE | re.DOTALL)
+
+
+def _report_text(output: str) -> str:
+    """Return the reviewer's single fenced YAML report, or the bare message.
+
+    Prose around one fenced block is ignored; several blocks are ambiguous.
+    """
+    blocks = _YAML_FENCE.findall(output)
+    if len(blocks) > 1:
+        raise ValueError("Report must contain exactly one yaml block")
+    return blocks[0] if blocks else output.strip()
+
+
 def parse_packet(text: str):
     return Packet.model_validate(json.loads(text, object_pairs_hook=_unique_pairs))
 
@@ -394,10 +408,7 @@ class ReviewLedger:
                 if payload.get("status") != "completed":
                     raise ValueError("Reviewer did not complete successfully")
                 self._verify(frozen)
-                raw = payload.get("output", "").strip()
-                if raw.startswith("```yaml\n") and raw.endswith("```"):
-                    raw = raw[8:-3]
-                report = Report.model_validate(_yaml(raw))
+                report = Report.model_validate(_yaml(_report_text(payload.get("output", ""))))
                 packet = frozen["packet"]
                 if report.stage != stage or any(
                     getattr(report, key) != packet[key]
