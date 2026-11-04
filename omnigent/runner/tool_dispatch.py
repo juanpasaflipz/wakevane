@@ -6717,7 +6717,13 @@ async def execute_tool(
         from omnigent.runner.egm_review import ReviewLedger
         from omnigent.runner.egm_review import enabled as egm_enabled
 
-        if egm_enabled(agent_spec) and tool_name in {"sys_egm_review", "sys_session_send"}:
+        # The MCP proxy returns through /mcp/execute with no manager. Own the
+        # ledger only at that execution boundary so one launch reserves once.
+        if (
+            mcp_manager is None
+            and egm_enabled(agent_spec)
+            and tool_name in {"sys_egm_review", "sys_session_send"}
+        ):
             os_spec = _effective_runner_os_env_spec(agent_spec, conversation_id, runner_workspace)
             if not conversation_id or not os_spec.cwd:
                 raise ValueError("Design review requires session and workspace")

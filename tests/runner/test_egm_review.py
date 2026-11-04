@@ -267,13 +267,18 @@ def test_concurrent_dispatches_cannot_both_launch(review):
     assert ledger.status()["dispatches"] == 1
 
 
-def test_dispatch_and_inbox_wiring(review, monkeypatch):
+@pytest.mark.parametrize("proxied", [False, True])
+def test_dispatch_and_inbox_wiring(review, monkeypatch, proxied):
     import asyncio
     from pathlib import Path
 
+    import httpx
+
     from omnigent.runner import tool_dispatch
+    from omnigent.runner.proxy_mcp_manager import ProxyMcpManager
     from omnigent.spec import load
     from omnigent.tools.manager import ToolManager
+    from tests.runner.test_mcp_routes import Harness
 
     ledger, _packet, spec_path, contract, source = review
     spec = load(Path(__file__).resolve().parents[2] / "examples/egm")
@@ -297,12 +302,41 @@ def test_dispatch_and_inbox_wiring(review, monkeypatch):
 
     monkeypatch.setattr(tool_dispatch, "_evaluate_subagent_inbox_output", policy)
     monkeypatch.setattr(tool_dispatch, "_cleanup_drained_subagent_work", cleanup)
+    harness = Harness(runner_workspace=ledger.workspace)
+    harness.spec_cache["integration"] = spec
+    deny_next = False
+
+    async def forward(request):
+        nonlocal deny_next
+        assert request.url.path == "/v1/sessions/integration/mcp"
+        if deny_next:
+            deny_next = False
+            return httpx.Response(
+                200, json={"error": {"code": -32001, "message": "Review denied by policy"}}
+            )
+        async with harness.client() as client:
+            response = await client.post(
+                "/v1/sessions/integration/mcp/execute", json=json.loads(request.content)
+            )
+        assert response.status_code == 200
+        result = response.json()
+        if "error" in result:
+            return httpx.Response(200, json=result)
+        return httpx.Response(
+            200,
+            json={"result": {"content": [{"type": "text", "text": result["result"]["output"]}]}},
+        )
+
+    ap_client = httpx.AsyncClient(transport=httpx.MockTransport(forward), base_url="http://server")
+    proxy = ProxyMcpManager(session_id="integration", ap_client=ap_client)
 
     async def run():
+        nonlocal deny_next
         common = {
             "agent_spec": spec,
             "conversation_id": "integration",
             "runner_workspace": ledger.workspace,
+            "mcp_manager": proxy if proxied else None,
         }
         frozen = json.loads(
             await tool_dispatch.execute_tool(
@@ -332,23 +366,35 @@ def test_dispatch_and_inbox_wiring(review, monkeypatch):
         )
         assert "Error:" in bad
         assert calls == []
+        assert ReviewLedger("integration", ledger.workspace).status()["dispatches"] == 0
         for stage in ("comprehension", "critic", "readiness"):
             title = "egm-" + stage
-            await tool_dispatch.execute_tool(
+            arguments = json.dumps(
+                {
+                    "agent": "goldfish",
+                    "title": title,
+                    "args": {
+                        "purpose": "review",
+                        "input": json.dumps({**current, "stage": stage}),
+                    },
+                }
+            )
+            if proxied and stage == "comprehension":
+                deny_next = True
+                denied = await tool_dispatch.execute_tool(
+                    tool_name="sys_session_send", arguments=arguments, **common
+                )
+                assert "Review denied by policy" in denied
+                assert calls == []
+                assert ReviewLedger("integration", ledger.workspace).status()["dispatches"] == 0
+            output = await tool_dispatch.execute_tool(
                 tool_name="sys_session_send",
-                arguments=json.dumps(
-                    {
-                        "agent": "goldfish",
-                        "title": title,
-                        "args": {
-                            "purpose": "review",
-                            "input": json.dumps({**current, "stage": stage}),
-                        },
-                    }
-                ),
+                arguments=arguments,
                 **common,
             )
+            assert json.loads(output)["conversation_id"] == title + "-child"
             inbox = asyncio.Queue()
+            harness.inboxes["integration"] = inbox
             inbox.put_nowait(
                 {
                     "type": "sub_agent",
@@ -366,9 +412,14 @@ def test_dispatch_and_inbox_wiring(review, monkeypatch):
             )
         )
         assert result["ready"]
+        assert result["dispatches"] == 3
         assert len(calls) == 3
 
-    asyncio.run(run())
+    async def with_client():
+        async with ap_client:
+            await run()
+
+    asyncio.run(with_client())
 
 
 def test_duplicate_fields_are_rejected_before_launch_and_on_report(review):

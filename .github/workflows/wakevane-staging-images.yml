@@ -63,7 +63,8 @@ jobs:
           set -euo pipefail
           EXPECTED=$(sha256sum omnigent/runner/egm_review.py | cut -d ' ' -f 1)
           EXPECTED_RUNNER=$(sha256sum omnigent/runner/app.py | cut -d ' ' -f 1)
-          docker run --rm --entrypoint python -e EXPECTED="$EXPECTED" -e EXPECTED_RUNNER="$EXPECTED_RUNNER" "$IMAGE_REF" -c 'import hashlib,os,pathlib; import omnigent.runner.egm_review as m; import omnigent.tools.builtins.egm_review; source=pathlib.Path(m.__file__); assert hashlib.sha256(source.read_bytes()).hexdigest() == os.environ["EXPECTED"]; assert hashlib.sha256(source.with_name("app.py").read_bytes()).hexdigest() == os.environ["EXPECTED_RUNNER"]'
+          EXPECTED_DISPATCH=$(sha256sum omnigent/runner/tool_dispatch.py | cut -d ' ' -f 1)
+          docker run --rm --entrypoint python -e EXPECTED="$EXPECTED" -e EXPECTED_RUNNER="$EXPECTED_RUNNER" -e EXPECTED_DISPATCH="$EXPECTED_DISPATCH" "$IMAGE_REF" -c 'import hashlib,os,pathlib; import omnigent.runner.egm_review as m; import omnigent.tools.builtins.egm_review; source=pathlib.Path(m.__file__); assert hashlib.sha256(source.read_bytes()).hexdigest() == os.environ["EXPECTED"]; assert hashlib.sha256(source.with_name("app.py").read_bytes()).hexdigest() == os.environ["EXPECTED_RUNNER"]; assert hashlib.sha256(source.with_name("tool_dispatch.py").read_bytes()).hexdigest() == os.environ["EXPECTED_DISPATCH"]'
           if [ "$IMAGE_KIND" = server ]; then
             docker run --rm --entrypoint python "$IMAGE_REF" -c 'import modal; import omnigent.server.compute_meter'
           fi

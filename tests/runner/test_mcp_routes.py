@@ -119,6 +119,7 @@ class Harness:
         mcp_manager: _FakeMcpManager | None = None,
         process_manager: _FakeProcessManager | None = None,
         spec_resolver: object | None = None,
+        runner_workspace: Path | None = None,
     ) -> None:
         self.app = FastAPI()
         self.mcp_manager = mcp_manager
@@ -149,7 +150,7 @@ class Harness:
             return self.resolved_entry
 
         async def _runtime_cwd(session_id: str) -> Path | None:
-            return Path("/tmp/runtime-cwd")
+            return runner_workspace or Path("/tmp/runtime-cwd")
 
         mcp_routes.register_mcp_routes(
             self.app,
@@ -169,7 +170,7 @@ class Harness:
             mcp_manager=mcp_manager,  # type: ignore[arg-type]
             process_manager=process_manager,  # type: ignore[arg-type]
             resource_registry=SessionResourceRegistry(),
-            runner_workspace=Path("/tmp/runner-workspace"),
+            runner_workspace=runner_workspace or Path("/tmp/runner-workspace"),
             server_client=httpx.AsyncClient(base_url="http://server"),
             spec_resolver=spec_resolver,  # type: ignore[arg-type]
             terminal_registry=None,
