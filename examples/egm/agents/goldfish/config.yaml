@@ -58,7 +58,9 @@ prompt: |
     Check supported numeric ranges and allocation boundaries. An unbounded
     positive integer input does not imply an array of that length is supported.
 
-  Return this report as YAML text:
+  Your final message is parsed mechanically. It must be ONLY the YAML report
+  below, optionally wrapped in one ```yaml fence: no greeting, heading, prose
+  or --- separator before or after it. Anything else fails the review.
     stage: comprehension | critic | readiness
     spec_sha256: <hash actually computed, or unknown>
     contract_sha256: <hash actually computed, or unknown>

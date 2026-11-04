@@ -143,6 +143,10 @@ prompt: |
      the revision hash, contract hash and code evidence still match, and every
      contract ID has an evidence-backed assessment. Missing, malformed,
      failed or incomplete reports are blocked, never an implicit pass.
+     If sys_egm_review status shows the latest review of a stage on the current
+     revision with an error or failed result, redispatch THAT stage with the
+     next attempt number and the unchanged packet; never dispatch a later stage
+     first. A revise verdict is not an error: resolve it in a new revision.
   5. Resolve findings against evidence. Record each finding and its disposition
      in decisions.md; do not dismiss a blocker simply to progress. Recheck ALL
      original constraints: a local fix must not silently drop

@@ -83,22 +83,26 @@ def report(packet, stage):
     }
 
 
-def complete(ledger, child, value, status="completed"):
+def complete(ledger, child, value, status="completed", wrapper="{}"):
     ledger.record(
         {
             "type": "sub_agent",
             "conversation_id": child,
             "status": status,
-            "output": yaml.safe_dump(value),
+            "output": wrapper.format(yaml.safe_dump(value)),
         }
     )
 
 
 def test_ready_requires_three_bound_reports_and_survives_restart(review):
     ledger, packet, *_ = review
-    for stage in ("comprehension", "critic", "readiness"):
+    for stage, wrapper in (
+        ("comprehension", "{}"),
+        ("critic", "```yaml\n{}```"),
+        ("readiness", "{}"),
+    ):
         assert not ledger.status()["ready"]
-        complete(ledger, dispatch(ledger, packet, stage), report(packet, stage))
+        complete(ledger, dispatch(ledger, packet, stage), report(packet, stage), wrapper=wrapper)
     reopened = ReviewLedger("root", ledger.workspace, root=ledger.path.parent)
     assert reopened.status()["ready"]
     assert reopened.status()["execution_status"] == "not_run"
@@ -162,6 +166,7 @@ def test_changed_inputs_invalidate_ready(review, artifact):
         "limitation",
         "executed",
         "malformed",
+        "prose_wrapped",
         "failed",
         "cancelled",
     ],
@@ -171,6 +176,7 @@ def test_false_pass_cannot_advance(review, fault):
     child = dispatch(ledger, packet, "comprehension")
     value = report(packet, "comprehension")
     status = "completed"
+    wrapper = "{}"
     if fault == "missing_check":
         value["requirement_checks"] = []
     elif fault == "duplicate_check":
@@ -196,9 +202,11 @@ def test_false_pass_cannot_advance(review, fault):
         value["execution_status"] = "passed"
     elif fault == "malformed":
         value = "PASS"
+    elif fault == "prose_wrapped":
+        wrapper = "I reviewed the packet.\n\n---\n\n{}"
     else:
         status = fault
-    complete(ledger, child, value, status)
+    complete(ledger, child, value, status, wrapper=wrapper)
     assert not ledger.status()["ready"]
     with pytest.raises(ValueError, match="Prior stages"):
         dispatch(ledger, packet, "critic")
