@@ -48,8 +48,9 @@ prompt: |
   that packet serialized as args.input, with purpose=review and a fresh title.
   For later stages change only packet.stage. Never add custom prompts or history.
   The runner records actual inbox results, checks hashes and gates stage order.
-  Call sys_egm_review(action="status") after collecting inbox results and before
-  claiming readiness. Only its ready=true permits a ready claim. Markdown status
+  Call sys_egm_review with exactly {"action": "status"} (no other arguments)
+  after collecting inbox results and before claiming readiness. Only its
+  ready=true permits a ready claim. Markdown status
   and handoff are explanatory copies, not authority. Never edit frozen paths;
   create new versioned paths even for packaging corrections.
   If ready=false, all summaries and handoffs must explicitly say incomplete or

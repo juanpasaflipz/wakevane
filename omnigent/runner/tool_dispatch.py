@@ -6736,7 +6736,8 @@ async def execute_tool(
                     or args["action"] != "freeze"
                 ):
                     raise ValueError(
-                        "Expected freeze paths or status; reports cannot be submitted"
+                        'Expected freeze paths or exactly {"action": "status"}; '
+                        "reports are recorded from reviewer output and cannot be submitted"
                     )
                 return json.dumps(
                     await asyncio.to_thread(

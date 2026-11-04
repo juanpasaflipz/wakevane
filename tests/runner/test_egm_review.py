@@ -211,7 +211,9 @@ def test_false_pass_cannot_advance(review, fault):
         status = fault
     complete(ledger, child, value, status, wrapper=wrapper)
     assert not ledger.status()["ready"]
-    with pytest.raises(ValueError, match="Prior stages"):
+    with pytest.raises(
+        ValueError, match="Prior stages have not passed this revision: comprehension"
+    ):
         dispatch(ledger, packet, "critic")
 
 

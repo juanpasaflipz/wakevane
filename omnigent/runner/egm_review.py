@@ -345,8 +345,13 @@ class ReviewLedger:
                 raise ValueError("A review dispatch is still pending")
             passed = self._passed(db, revision)
             index = STAGES.index(packet.stage)
-            if any(stage not in passed for stage in STAGES[:index]):
-                raise ValueError("Prior stages have not passed this revision")
+            missing = [stage for stage in STAGES[:index] if stage not in passed]
+            if missing:
+                raise ValueError(
+                    f"Prior stages have not passed this revision: {missing[0]}. "
+                    "Redispatch it with the next attempt title only if its latest review "
+                    "errored; a revise verdict needs a new revision"
+                )
             if packet.stage == "readiness" and self._blockers(frozen):
                 raise ValueError(
                     "Unresolved material decisions or acceptance corrections: "
