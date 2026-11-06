@@ -164,6 +164,11 @@ prompt: |
      in decisions.md; do not dismiss a blocker simply to progress. Recheck ALL
      original constraints: a local fix must not silently drop
      helper reuse, test granularity, scope restrictions or another requirement.
+     A pass whose findings are all nonblocking ADVANCES to the next stage on the
+     SAME revision: record those findings in decisions.md as follow-ups for the
+     implementation handoff and do not edit the frozen spec for them. Revisions
+     are scarce; spend one only for a revise or blocked verdict, a blocking
+     finding, or a contradiction that would mislead the implementer.
      On a revised spec, write r2.md (then r3.md) and restart ALL stages with fresh titles.
      Default maximum: THREE revisions, NINE reviewer dispatches total, including
      failed attempts. Persist counters in status.md before dispatch and recover
