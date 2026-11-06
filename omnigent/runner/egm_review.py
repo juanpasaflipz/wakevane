@@ -64,6 +64,25 @@ def _report_text(output: str) -> str:
     return blocks[0] if blocks else output.strip()
 
 
+# Reviewer-facing artifacts must not carry review history; these patterns are
+# the mechanical fingerprints of a dispatch title, a finding id or a verdict.
+_HISTORY_PATTERNS = (
+    re.compile(r"egm-[A-Za-z0-9_-]+-r\d+-(?:comprehension|critic|readiness)-\d+"),
+    re.compile(r"\b(?:comprehension|critic|readiness)-\d+\b"),
+    re.compile(r"\b(?:fresh-context|prior|previous|earlier) reviewer", re.IGNORECASE),
+)
+
+
+def _history_reference(data: bytes) -> str | None:
+    """Return the first review-history fingerprint found in an artifact, if any."""
+    text = data.decode("utf-8", errors="replace")
+    for pattern in _HISTORY_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            return match.group(0)
+    return None
+
+
 def parse_packet(text: str):
     return Packet.model_validate(json.loads(text, object_pairs_hook=_unique_pairs))
 
@@ -246,6 +265,14 @@ class ReviewLedger:
         contract = self._read(contract_path, artifact=True)
         spec_path = str(Path(spec_path).resolve(strict=True))
         contract_path = str(Path(contract_path).resolve(strict=True))
+        for label, data in (("spec", spec), ("contract", contract)):
+            found = _history_reference(data)
+            if found is not None:
+                raise ValueError(
+                    f"The {label} mentions review history ({found!r}); reviewer-facing "
+                    "artifacts carry only the current design and evidence. Keep verdicts, "
+                    "dispatch titles and finding ids in decisions.md or status.md."
+                )
         metadata = _metadata(spec, SpecMetadata)
         requirements = _metadata(contract, ContractMetadata)
         ids = [r.id for r in requirements.requirements]

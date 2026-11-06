@@ -675,3 +675,27 @@ def test_report_fence_may_follow_prose_on_the_same_line():
     assert _report_text(f"Report:\n\n```yaml\n{body}```") == body
     with pytest.raises(ValueError, match="exactly one"):
         _report_text(f"```yaml\n{body}```\nand again ```yaml\n{body}```\n")
+
+
+@pytest.mark.parametrize(
+    "history",
+    [
+        "Reviewer egm-run-r1-comprehension-2 flagged this.",
+        "Resolved finding comprehension-1 by rewording.",
+        "A fresh-context reviewer noted the gap.",
+    ],
+)
+def test_freeze_refuses_artifacts_that_carry_review_history(review, history):
+    from omnigent.runner.egm_review import ReviewLedger
+
+    ledger, _, spec, contract, source = review
+    revised = spec.with_name("r2.md")
+    revised.write_text(spec.read_text() + f"\n{history}\n")
+    fresh = ReviewLedger("root", ledger.workspace, root=ledger.path.parent)
+    with pytest.raises(ValueError, match="mentions review history"):
+        fresh.freeze(str(revised), str(contract), [str(source)])
+    # Nothing was frozen, so no revision or dispatch budget was spent.
+    assert fresh.status()["revision"] == 1
+    # Design rationale without review references still freezes.
+    revised.write_text(spec.read_text() + "\nRationale: the earlier draft was ambiguous.\n")
+    assert fresh.freeze(str(revised), str(contract), [str(source)])["revision"] == 2
