@@ -78,7 +78,8 @@ BASELINE_METHOD = (
     "--binary -- . ':(exclude)docs/designs/egm'`, (3) canonical JSON (sorted keys, "
     "separators ',' and ':') of baseline_dirty_files, which maps each modified or "
     "untracked path to the sha256 of its bytes or 'deleted'. A clean checkout yields "
-    "sha256 of the two bytes '{}' = 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a."
+    "sha256 of the two bytes '{}' = "
+    "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a."
 )
 
 
