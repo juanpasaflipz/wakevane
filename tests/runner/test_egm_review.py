@@ -681,6 +681,8 @@ def test_report_fence_may_follow_prose_on_the_same_line():
         "Reviewer egm-run-r1-comprehension-2 flagged this.",
         "Resolved finding comprehension-1 by rewording.",
         "A fresh-context reviewer noted the gap.",
+        "Chosen per the review protocol's guidance on boundaries.",
+        "Split the cases, following the instruction to check allocation boundaries.",
     ],
 )
 def test_freeze_refuses_artifacts_that_carry_review_history(review, history):

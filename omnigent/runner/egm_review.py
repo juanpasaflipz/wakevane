@@ -70,6 +70,14 @@ _HISTORY_PATTERNS = (
     re.compile(r"egm-[A-Za-z0-9_-]+-r\d+-(?:comprehension|critic|readiness)-\d+"),
     re.compile(r"\b(?:comprehension|critic|readiness)-\d+\b"),
     re.compile(r"\b(?:fresh-context|prior|previous|earlier) reviewer", re.IGNORECASE),
+    # Workflow text leaking into the design reads as leading the reviewer.
+    re.compile(
+        r"\breview protocol\b|\bprotocol'?s? (?:own )?(?:guidance|instruction)", re.IGNORECASE
+    ),
+    re.compile(
+        r"\breviewer(?:-facing)? (?:guidance|instructions?)\b|\bthe instruction to\b",
+        re.IGNORECASE,
+    ),
 )
 
 
