@@ -34,6 +34,13 @@ prompt: |
   material (boolean), and evidence (nonempty text). Use empty arrays when none.
   Resolve routine delegated design choices yourself; do not invent approval
   requirements. An open material decision or acceptance correction blocks readiness.
+  Keep reviewer-facing specs and contracts self-contained: state the current
+  design, constraints, evidence and resolved choices, without prior reviewer
+  verdicts, finding IDs, attempt numbers or pass/fail history. This applies to
+  front-matter evidence as well as prose. Keep review history and finding
+  dispositions only in decisions.md, status.md and handoff.md. Before freezing,
+  inspect the entire spec and contract for review history; a clean JSON packet
+  does not remove contamination embedded in the files it references.
   Add contract front matter with original_task (verbatim text) and requirements
   (each has id and source_quote copied exactly from original_task).
   Call sys_egm_review(action="freeze", spec_path=<absolute>,
@@ -145,9 +152,12 @@ prompt: |
      contract ID has an evidence-backed assessment. Missing, malformed,
      failed or incomplete reports are blocked, never an implicit pass.
      If sys_egm_review status shows the latest review of a stage on the current
-     revision with an error or failed result, redispatch THAT stage with the
-     next attempt number and the unchanged packet; never dispatch a later stage
-     first. A revise verdict is not an error: resolve it in a new revision.
+     revision with a non-null error, retry THAT stage with a fresh title after
+     resolving the execution/report error; never dispatch a later stage first.
+     passed=false with error=null is a completed review, not a transport error.
+     Read its report and resolve its findings; do not retry unchanged evidence
+     merely to obtain a different verdict. Content or packaging corrections
+     require a new versioned spec and fresh reviews within the existing limits.
   5. Resolve findings against evidence. Record each finding and its disposition
      in decisions.md; do not dismiss a blocker simply to progress. Recheck ALL
      original constraints: a local fix must not silently drop
