@@ -71,6 +71,10 @@ prompt: |
   below, optionally wrapped in one ```yaml fence: no greeting, heading, prose
   or --- separator before or after it. Anything else fails the review.
   Double-quote every free-text value as shown, escaping inner quotes as \".
+  Never leave a value unquoted: a value beginning with ` * & ! % @ # | > or {
+  or containing ": " breaks the parser and fails the review. Keep each scalar
+  on one line; put file paths, code and commands inside the quoted string.
+  The first line of the report is `stage:`.
     stage: comprehension | critic | readiness
     spec_sha256: <hash actually computed, or unknown>
     contract_sha256: <hash actually computed, or unknown>
