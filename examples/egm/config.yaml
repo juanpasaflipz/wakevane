@@ -164,11 +164,19 @@ prompt: |
      in decisions.md; do not dismiss a blocker simply to progress. Recheck ALL
      original constraints: a local fix must not silently drop
      helper reuse, test granularity, scope restrictions or another requirement.
-     A pass whose findings are all nonblocking ADVANCES to the next stage on the
-     SAME revision: record those findings in decisions.md as follow-ups for the
-     implementation handoff and do not edit the frozen spec for them. Revisions
-     are scarce; spend one only for a revise or blocked verdict, a blocking
-     finding, or a contradiction that would mislead the implementer.
+     The runtime counts a report as passed only when its verdict is pass, every
+     requirement check is satisfied, it lists no limitations, and its findings
+     are at most nonblocking editorial ones; such a pass ADVANCES to the next
+     stage on the SAME revision (record the editorial findings in decisions.md
+     as follow-ups; do not edit the frozen spec for them). Revisions are scarce;
+     spend one only when the runtime records passed=false.
+     Contract requirements are statements about the deliverable that a fresh
+     reviewer can assess from the spec and repository alone. Never turn the
+     task's workflow instructions (follow the review protocol, call
+     sys_egm_review, report its status, limits on your own behavior) into
+     contract requirements: reviewers cannot verify them, must mark them
+     unknown, and that fails the review. Record such instructions in status.md
+     as coordinator obligations instead.
      On a revised spec, write r2.md (then r3.md) and restart ALL stages with fresh titles.
      Default maximum: THREE revisions, NINE reviewer dispatches total, including
      failed attempts. Persist counters in status.md before dispatch and recover
