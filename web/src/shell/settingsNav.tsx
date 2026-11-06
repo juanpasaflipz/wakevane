@@ -12,6 +12,7 @@ import {
   ArrowLeftIcon,
   BlocksIcon,
   BotIcon,
+  CreditCardIcon,
   DownloadIcon,
   GitBranchIcon,
   KeyboardIcon,
@@ -28,7 +29,11 @@ import {
 import { Link, useLocation } from "@/lib/routing";
 import { Button } from "@/components/ui/button";
 import { useServerInfo } from "@/lib/CapabilitiesContext";
-import { customAgentsSettingsEnabled, isSingleUserMode } from "@/lib/capabilities";
+import {
+  customAgentsSettingsEnabled,
+  isFeatureEnabled,
+  isSingleUserMode,
+} from "@/lib/capabilities";
 import { useIsAdmin } from "@/hooks/useIsAdmin";
 import { isElectronShell } from "@/lib/nativeBridge";
 import { cn } from "@/lib/utils";
@@ -45,6 +50,7 @@ export type SettingsSectionId =
   | "shortcuts"
   | "import"
   | "account"
+  | "billing"
   | "members"
   | "policies"
   | "sharing"
@@ -63,6 +69,7 @@ const SECTION_IDS: readonly SettingsSectionId[] = [
   "shortcuts",
   "import",
   "account",
+  "billing",
   "members",
   "policies",
   "sharing",
@@ -101,6 +108,7 @@ export function settingsNavGroups(
   integrationsEnabled = false,
   customAgentsEnabled = false,
   mcpEnabled = false,
+  billingEnabled = false,
 ): SettingsNavGroup[] {
   const harnesses: SettingsNavItem = {
     id: "harnesses",
@@ -128,7 +136,10 @@ export function settingsNavGroups(
   }
   if (hasAuthSession) {
     // Account leads the group when present — it's the most-visited section
-    // on a deploy with sign-in.
+    // on a deploy with sign-in. Billing follows it on deploys selling seats.
+    if (billingEnabled) {
+      general.unshift({ id: "billing", label: "Billing", icon: CreditCardIcon });
+    }
     general.unshift({ id: "account", label: "Account", icon: UserCogIcon });
   }
   const groups: SettingsNavGroup[] = [{ title: "General", items: general }];
@@ -266,6 +277,7 @@ export function SettingsSidebarBody({
     integrationsEnabled,
     customAgentsSettingsEnabled(info),
     mcpEnabled,
+    isFeatureEnabled(info, "billing"),
   );
 
   return (

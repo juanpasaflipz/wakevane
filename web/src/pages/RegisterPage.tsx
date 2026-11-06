@@ -26,13 +26,18 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { register as registerRequest } from "@/lib/accountsApi";
 import { withBasePath } from "@/lib/basePath";
+import { useServerInfo } from "@/lib/CapabilitiesContext";
 
 const MIN_PASSWORD_LENGTH = 8;
 
 export function RegisterPage() {
   const loginV2 = useLoginV2();
+  const info = useServerInfo();
   const [params] = useSearchParams();
   const invite = params.get("invite") ?? "";
+  // A public deploy registers without an invite; the server still refuses an
+  // invite-less POST when open signup is off.
+  const openSignup = info !== "loading" && info.open_signup === true;
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -44,7 +49,7 @@ export function RegisterPage() {
   // Server rejects invites that are missing / expired / redeemed
   // with a generic 400. Surface the same generic UI in the
   // most-common bad case (no invite param at all).
-  const missingInvite = invite === "";
+  const missingInvite = invite === "" && !openSignup;
 
   useEffect(() => {
     const el = document.getElementById("register-username");
@@ -66,7 +71,9 @@ export function RegisterPage() {
     }
 
     setSubmitting(true);
-    const result = await registerRequest({ invite, username, password });
+    const result = await registerRequest(
+      invite === "" ? { username, password } : { invite, username, password },
+    );
     if (result.ok) {
       window.location.href = withBasePath("/");
       return;
@@ -80,7 +87,9 @@ export function RegisterPage() {
       <div className="space-y-1 text-center">
         <h1 className="text-2xl font-semibold tracking-tight">Create your account</h1>
         <p className="text-ui text-muted-foreground">
-          You were invited to join this Omnigent server.
+          {invite === ""
+            ? "Sign up to run design reviews in the cloud. Pick a plan after you sign in."
+            : "You were invited to join this server."}
         </p>
       </div>
 

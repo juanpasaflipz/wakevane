@@ -2174,3 +2174,76 @@ def test_cli_login_with_issue_refresh_issues_grant(accounts_app: TestClient) -> 
     assert "access_token" in refresh_body
     # Login grants don't rotate — same token is returned.
     assert refresh_body["refresh_token"] == refresh_token
+
+
+@pytest.fixture
+def accounts_app_open_signup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[TestClient]:
+    """Accounts-mode app whose register route needs no invite."""
+    monkeypatch.setenv("OMNIGENT_ACCOUNTS_OPEN_SIGNUP", "1")
+    yield from _build_accounts_app(tmp_path, monkeypatch, init_admin_password="admin-pw-12345")
+
+
+def test_register_without_invite_requires_open_signup(accounts_app: TestClient) -> None:
+    """Invite-only stays the default: no invite, no account."""
+    assert accounts_app.get("/v1/info").json()["open_signup"] is False
+    from fastapi.testclient import TestClient as _TC
+
+    resp = _TC(accounts_app.app).post(
+        "/auth/register", json={"username": "carol", "password": "aaaaaaaa"}
+    )
+    assert resp.status_code == 400
+    assert "invite" in resp.json()["error"].lower()
+
+
+def test_open_signup_creates_a_member_and_keeps_invites_working(
+    accounts_app_open_signup: TestClient,
+) -> None:
+    """Self-serve registration yields a non-admin; admin invites still promote."""
+    app = accounts_app_open_signup
+    assert app.get("/v1/info").json()["open_signup"] is True
+    from fastapi.testclient import TestClient as _TC
+
+    resp = _TC(app.app).post("/auth/register", json={"username": "carol", "password": "aaaaaaaa"})
+    assert resp.status_code == 200
+    assert resp.json()["user"] == {"id": "carol", "is_admin": False}
+    taken = _TC(app.app).post("/auth/register", json={"username": "carol", "password": "bbbbbbbb"})
+    assert taken.status_code == 409
+    admin = _login(app, "admin", "admin-pw-12345")
+    token = admin.post("/auth/invite", json={"is_admin": True}).json()["token"]
+    invited = _TC(app.app).post(
+        "/auth/register", json={"invite": token, "username": "dave", "password": "cccccccc"}
+    )
+    assert invited.status_code == 200 and invited.json()["user"]["is_admin"] is True
+
+
+@pytest.fixture
+def accounts_app_web_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    """Accounts-mode app on a browser-only deployment."""
+    monkeypatch.setenv("OMNIGENT_FEATURES", "web_only")
+    yield from _build_accounts_app(tmp_path, monkeypatch, init_admin_password="admin-pw-12345")
+
+
+def test_web_only_limits_members_to_managed_sessions(accounts_app_web_only: TestClient) -> None:
+    """Members cannot bind local hosts; admins keep every host type."""
+    app = accounts_app_web_only
+    assert app.get("/v1/info").json()["features"]["web_only"] is True
+    admin = _login(app, "admin", "admin-pw-12345")
+    token = admin.post("/auth/invite", json={}).json()["token"]
+    from fastapi.testclient import TestClient as _TC
+
+    joined = _TC(app.app).post(
+        "/auth/register", json={"invite": token, "username": "carol", "password": "aaaaaaaa"}
+    )
+    assert joined.status_code == 200
+    member = _login(_TC(app.app), "carol", "aaaaaaaa")
+    body = {"agent_id": "ab" * 16, "host_type": "external"}
+    refused = member.post("/v1/sessions", json=body)
+    assert refused.status_code == 403
+    assert "managed cloud sandboxes" in str(refused.json())
+    # The gate is host-type specific and never applies to operators: both fall
+    # through to the agent lookup, which fails on the synthetic id.
+    assert member.post("/v1/sessions", json={**body, "host_type": "managed"}).status_code == 404
+    admin_response = admin.post("/v1/sessions", json=body)
+    assert admin_response.status_code == 404, admin_response.json()

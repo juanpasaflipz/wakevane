@@ -252,6 +252,16 @@ Settled constraints:
   writes are also idempotent (same commit SHA, existing branch and PR reused).
   Running more than one replica requires a database-backed approval row first.
 
+### Seat billing on the same ledger
+
+Grants carry a `kind`: the operator `trial` described here, plus
+`period_credit` and `overage` grants that [seat billing](SEAT_BILLING.md)
+creates from a Stripe subscription. `FundedTrialPolicy` spends the trial
+first, then the subscription grants, through one `reserve` path shared by
+launch admission and the gateway. Subscription grants add a `markup_percent`
+to holds and settlements; trial grants stay at list price. Nothing changes
+for a deployment that leaves the `billing` feature off.
+
 ### Not yet implemented
 
 1. Storage charges, private-repository commit resolution (GitHub App) and the

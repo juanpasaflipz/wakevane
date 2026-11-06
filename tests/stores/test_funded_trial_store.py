@@ -160,3 +160,86 @@ def test_regrant_keeps_recorded_spend(db_uri: str) -> None:
     assert grant.remaining_micros == 1_000_000
     with pytest.raises(FundedTrialDenied):
         _reserve(store, "request-2", 1_500_000)
+
+
+def test_grant_kinds_are_keyed_by_period_and_carry_markup(db_uri: str) -> None:
+    store = _store(db_uri)
+    _grant(store)
+    with pytest.raises(ValueError, match="kind"):
+        _grant(store, kind="bonus")
+    with pytest.raises(ValueError, match="billing period"):
+        _grant(store, billing_period_end=_NOW + 100)
+    first_period = _NOW + 10 * 86_400
+    second_period = _NOW + 40 * 86_400
+    credit = _grant_kind(store, "period_credit", first_period, allowance_micros=10_000_000)
+    assert store.get_grant("owner") is not None  # the trial is untouched
+    assert store.get_grant("owner", "period_credit") == credit
+    charge = store.reserve(
+        "owner",
+        capability="inference",
+        kind="inference",
+        amount_micros=1_000_000,
+        idempotency_key="marked-up",
+        grant_id=credit.id,
+    )
+    assert charge.reserved_micros == 1_250_000  # 25 % markup on the hold
+    settled = store.settle(charge.id, 400_000)
+    assert settled.settled_micros == 500_000  # and on the measured cost
+    later = _grant_kind(store, "period_credit", second_period, allowance_micros=10_000_000)
+    assert later.id != credit.id and later.spent_micros == 0
+    assert store.get_grant("owner", "period_credit") == later
+    assert [grant.kind for grant in store.list_grants("owner")] == [
+        "period_credit",
+        "period_credit",
+        "trial",
+    ]
+    revoked = store.revoke_grants("owner", kinds=("period_credit", "overage"), actor_id=None)
+    assert {grant.id for grant in revoked} == {credit.id, later.id}
+    assert store.get_grant("owner").revoked_at is None  # type: ignore[union-attr]
+
+
+def test_reporting_marks_each_settled_overage_charge_once(db_uri: str) -> None:
+    store = _store(db_uri)
+    overage = _grant_kind(store, "overage", _NOW + 10 * 86_400, allowance_micros=10_000_000)
+    charge = store.reserve(
+        "owner",
+        capability="inference",
+        kind="inference",
+        amount_micros=1_000_000,
+        idempotency_key="o1",
+        grant_id=overage.id,
+    )
+    assert store.settled_unreported(kind="overage") == []  # still reserved
+    store.settle(charge.id, 800_000)
+    pending = store.settled_unreported(kind="overage")
+    assert [(item.id, user) for item, user in pending] == [(charge.id, "owner")]
+    assert store.mark_reported(charge.id, report_ref="me_1") is True
+    assert store.mark_reported(charge.id, report_ref="me_2") is False
+    assert store.settled_unreported(kind="overage") == []
+    assert store.get_charge(charge.id).report_ref == "me_1"  # type: ignore[union-attr]
+    # Another account's grant cannot be charged through this grant id.
+    with pytest.raises(FundedTrialDenied) as denied:
+        store.reserve(
+            "someone-else",
+            capability="inference",
+            kind="inference",
+            amount_micros=1,
+            idempotency_key="x",
+            grant_id=overage.id,
+        )
+    assert denied.value.reason == "no_grant"
+
+
+def _grant_kind(store: FundedTrialStore, kind: str, period_end: int, **overrides: object):
+    terms: dict[str, object] = {
+        "allowance_micros": 10_000_000,
+        "expires_at": period_end,
+        "capabilities": ["inference", "compute"],
+        "max_concurrent_roots": 1,
+        "actor_id": None,
+        "kind": kind,
+        "billing_period_end": period_end,
+        "markup_percent": 25,
+    }
+    terms.update(overrides)
+    return store.upsert_grant("owner", **terms)  # type: ignore[arg-type]

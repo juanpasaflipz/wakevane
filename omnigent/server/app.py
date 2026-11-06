@@ -198,6 +198,8 @@ class ServerInfoResponse(BaseModel):
     single_user: bool
     login_url: str | None
     needs_setup: bool
+    # Accounts mode accepts ``POST /auth/register`` without an invite.
+    open_signup: bool = False
     databricks_features: bool
     managed_sandboxes_enabled: bool
     durable_initial_input: bool = False
@@ -1881,11 +1883,21 @@ def create_app(
         )
         if compute_meter is not None:
             await compute_meter.start()
+        billing_reporter: asyncio.Task[None] | None = None
+        billing_policy = getattr(app_inst.state, "billing", None)
+        if billing_policy is not None:
+            from omnigent.server.billing_reporter import report_overage_loop
+
+            billing_reporter = asyncio.create_task(report_overage_loop(billing_policy))
 
         try:
             with monitor_event_loop():
                 yield
         finally:
+            if billing_reporter is not None:
+                billing_reporter.cancel()
+                with suppress(asyncio.CancelledError):
+                    await billing_reporter
             if compute_meter is not None:
                 await compute_meter.shutdown()
             if managed_sandbox_reaper is not None:
@@ -3253,6 +3265,10 @@ def create_app(
                 "single_user": single_user,
                 "login_url": login_url,
                 "needs_setup": needs_setup,
+                "open_signup": accounts_enabled
+                and bool(
+                    getattr(getattr(auth_provider, "_accounts_config", None), "open_signup", False)
+                ),
                 "databricks_features": databricks_features,
                 "managed_sandboxes_enabled": managed_sandboxes_enabled,
                 "durable_initial_input": startup_inputs is not None,
@@ -3525,17 +3541,43 @@ def create_app(
     from omnigent.server.routes.funded_trial import create_funded_trial_router
 
     funded_trial_enabled = resolved_feature_flags.enabled(Feature.FUNDED_TRIAL)
+    funded_trial_store = (
+        FundedTrialStore(permission_store.storage_location)
+        if funded_trial_enabled and permission_store is not None
+        else None
+    )
+    billing_enabled = resolved_feature_flags.enabled(Feature.BILLING)
+    app.state.billing = None
+    if billing_enabled:
+        from omnigent.server.billing import BillingConfig, BillingPolicy
+        from omnigent.server.billing_store import BillingStore
+        from omnigent.server.billing_stripe import StripeSdkGateway
+
+        if not funded_trial_enabled or funded_trial_store is None or auth_provider is None:
+            raise RuntimeError(
+                "OMNIGENT_FEATURES=billing requires funded_trial, a database and "
+                "multi-user authentication"
+            )
+        billing_config = BillingConfig.from_environment()
+        billing_config.validate()
+        stripe_secret = os.environ.get(billing_config.secret_key_env, "")
+        if not stripe_secret:
+            raise RuntimeError(f"{billing_config.secret_key_env} is required for billing")
+        app.state.billing = BillingPolicy(
+            enabled=True,
+            store=BillingStore(permission_store.storage_location),
+            ledger=funded_trial_store,
+            config=billing_config,
+            gateway=StripeSdkGateway(stripe_secret),
+        )
     app.state.funded_trial = FundedTrialPolicy(
         # Single-user deployments have no stable account to bind a grant to.
         enabled=funded_trial_enabled and auth_provider is not None,
-        store=(
-            FundedTrialStore(permission_store.storage_location)
-            if funded_trial_enabled and permission_store is not None
-            else None
-        ),
+        store=funded_trial_store,
         config=FundedTrialConfig.from_environment()
         if funded_trial_enabled
         else FundedTrialConfig(),
+        billing=app.state.billing,
     )
     if getattr(app.state, "sandbox_config", None) is not None:
         # Shared object: every launch path reading the deployment sees the policy.
@@ -3595,6 +3637,18 @@ def create_app(
         prefix="/v1",
         tags=["funded trial"],
     )
+    if app.state.billing is not None:
+        from omnigent.server.routes.billing import create_billing_router
+
+        app.include_router(
+            create_billing_router(
+                policy=app.state.billing,
+                auth_provider=auth_provider,
+                permission_store=permission_store,
+            ),
+            prefix="/v1",
+            tags=["billing"],
+        )
     # Server-side speech-to-text behind the composer mic button
     # (designs/server-dictation.md). Availability is probed lazily, so
     # registering unconditionally is free for servers without the extra.

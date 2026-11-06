@@ -48,6 +48,8 @@ def test_unset_or_empty_uses_feature_defaults(environ: dict[str, str]) -> None:
         "egm_template": False,
         "egm_cloud": False,
         "egm_cloud_coding": False,
+        "billing": False,
+        "web_only": False,
     }
 
 

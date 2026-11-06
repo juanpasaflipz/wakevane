@@ -38,13 +38,29 @@ MICROS_PER_USD = 1_000_000
 
 Capability = Literal["inference", "compute", "coding", "pull_request"]
 ChargeKind = Literal["inference", "compute", "storage"]
+GrantKind = Literal["trial", "period_credit", "overage"]
 CAPABILITIES: frozenset[str] = frozenset({"inference", "compute", "coding", "pull_request"})
+GRANT_KINDS: frozenset[str] = frozenset({"trial", "period_credit", "overage"})
 _CHARGE_KINDS: frozenset[str] = frozenset({"inference", "compute", "storage"})
+
+
+def apply_markup(amount_micros: int, markup_percent: int) -> int:
+    """Scale a list-price amount by a grant's markup, rounding up."""
+    if markup_percent <= 0:
+        return amount_micros
+    scaled = amount_micros * (100 + markup_percent)
+    return -(-scaled // 100)
 
 
 @dataclass(frozen=True)
 class TrialGrant:
-    """A trial grant as read from the store."""
+    """A funding grant as read from the store.
+
+    ``kind`` says who pays: ``trial`` is an operator grant, ``period_credit``
+    a subscription period's included usage and ``overage`` the metered spend
+    beyond it. Subscription grants carry ``billing_period_end`` and a
+    ``markup_percent`` applied to every hold and settlement.
+    """
 
     id: str
     user_id: str
@@ -58,6 +74,9 @@ class TrialGrant:
     revoked_at: int | None
     created_by: str | None
     created_at: int
+    kind: str = "trial"
+    billing_period_end: int = 0
+    markup_percent: int = 0
 
     @property
     def remaining_micros(self) -> int:
@@ -88,6 +107,8 @@ class TrialCharge:
     settled_micros: int | None
     created_at: int
     settled_at: int | None
+    reported_at: int | None = None
+    report_ref: str | None = None
 
 
 class FundedTrialDenied(Exception):
@@ -113,6 +134,9 @@ def _to_grant(row: SqlFundedTrialGrant) -> TrialGrant:
         revoked_at=row.revoked_at,
         created_by=row.created_by,
         created_at=row.created_at,
+        kind=row.kind,
+        billing_period_end=row.billing_period_end,
+        markup_percent=row.markup_percent,
     )
 
 
@@ -129,6 +153,8 @@ def _to_charge(row: SqlFundedTrialCharge) -> TrialCharge:
         settled_micros=row.settled_micros,
         created_at=row.created_at,
         settled_at=row.settled_at,
+        reported_at=row.reported_at,
+        report_ref=row.report_ref,
     )
 
 
@@ -174,19 +200,58 @@ class FundedTrialStore:
         return int(self._clock())
 
     @staticmethod
-    def _grant_row(session: Session, user_id: str) -> SqlFundedTrialGrant | None:
+    def _grant_row(
+        session: Session,
+        user_id: str,
+        kind: str = "trial",
+        billing_period_end: int | None = None,
+    ) -> SqlFundedTrialGrant | None:
+        """The account's grant of one kind; the latest period when several exist."""
+        query = select(SqlFundedTrialGrant).where(
+            SqlFundedTrialGrant.workspace_id == current_workspace_id(),
+            SqlFundedTrialGrant.user_id == user_id,
+            SqlFundedTrialGrant.kind == kind,
+        )
+        if billing_period_end is not None:
+            query = query.where(SqlFundedTrialGrant.billing_period_end == billing_period_end)
         return session.scalars(
-            select(SqlFundedTrialGrant).where(
-                SqlFundedTrialGrant.workspace_id == current_workspace_id(),
-                SqlFundedTrialGrant.user_id == user_id,
-            )
+            query.order_by(
+                SqlFundedTrialGrant.billing_period_end.desc(),
+                SqlFundedTrialGrant.created_at.desc(),
+            ).limit(1)
         ).one_or_none()
 
-    def get_grant(self, user_id: str) -> TrialGrant | None:
-        """Return the account's grant, active or not."""
+    @staticmethod
+    def _grant_row_by_id(session: Session, grant_id: str) -> SqlFundedTrialGrant | None:
+        return session.get(SqlFundedTrialGrant, (current_workspace_id(), grant_id))
+
+    def get_grant(self, user_id: str, kind: str = "trial") -> TrialGrant | None:
+        """Return the account's grant of *kind*, active or not."""
         with self._session("select_funded_trial_grant") as session:
-            row = self._grant_row(session, user_id)
+            row = self._grant_row(session, user_id, kind)
             return _to_grant(row) if row is not None else None
+
+    def get_grant_by_id(self, grant_id: str) -> TrialGrant | None:
+        """Return one grant in the current workspace."""
+        with self._session("select_funded_trial_grant_by_id") as session:
+            row = self._grant_row_by_id(session, grant_id)
+            return _to_grant(row) if row is not None else None
+
+    def list_grants(self, user_id: str) -> list[TrialGrant]:
+        """Every grant the account holds, newest period first."""
+        with self._session("list_funded_trial_grants") as session:
+            rows = session.scalars(
+                select(SqlFundedTrialGrant)
+                .where(
+                    SqlFundedTrialGrant.workspace_id == current_workspace_id(),
+                    SqlFundedTrialGrant.user_id == user_id,
+                )
+                .order_by(
+                    SqlFundedTrialGrant.billing_period_end.desc(),
+                    SqlFundedTrialGrant.created_at.desc(),
+                )
+            )
+            return [_to_grant(row) for row in rows]
 
     def upsert_grant(
         self,
@@ -197,30 +262,43 @@ class FundedTrialStore:
         capabilities: Iterable[str],
         max_concurrent_roots: int,
         actor_id: str | None,
+        kind: str = "trial",
+        billing_period_end: int = 0,
+        markup_percent: int = 0,
     ) -> TrialGrant:
         """Create or replace the account's grant terms, keeping recorded spend.
 
-        Replacing terms reactivates a revoked grant; the existing reserved and
-        spent amounts continue to count against the new allowance.
+        Grants are keyed by account, kind and billing period, so a new
+        billing period creates a fresh ledger while replacing terms within a
+        period keeps its reserved and spent amounts. Replacing terms
+        reactivates a revoked grant.
         """
         requested = frozenset(capabilities)
         unknown = requested - CAPABILITIES
         if unknown:
             raise ValueError(f"Unknown trial capabilities: {sorted(unknown)}")
-        if allowance_micros < 0 or max_concurrent_roots < 1:
-            raise ValueError("Allowance must be non-negative and concurrency at least 1")
+        if kind not in GRANT_KINDS:
+            raise ValueError(f"Unknown grant kind {kind!r}")
+        if kind == "trial" and billing_period_end != 0:
+            raise ValueError("Trial grants have no billing period")
+        if allowance_micros < 0 or max_concurrent_roots < 1 or markup_percent < 0:
+            raise ValueError(
+                "Allowance and markup must be non-negative and concurrency at least 1"
+            )
         now = self._now()
         if expires_at <= now:
             raise ValueError("A trial grant must expire in the future")
 
         def write(session: Session) -> TrialGrant:
-            row = self._grant_row(session, user_id)
+            row = self._grant_row(session, user_id, kind, billing_period_end)
             event = "grant_updated"
             if row is None:
                 event = "granted"
                 row = SqlFundedTrialGrant(
                     id=f"ftg_{uuid.uuid4().hex}",
                     user_id=user_id,
+                    kind=kind,
+                    billing_period_end=billing_period_end,
                     reserved_micros=0,
                     spent_micros=0,
                     generation=0,
@@ -232,6 +310,7 @@ class FundedTrialStore:
             row.allowance_micros = allowance_micros
             row.expires_at = expires_at
             row.max_concurrent_roots = max_concurrent_roots
+            row.markup_percent = markup_percent
             row.revoked_at = None
             row.generation += 1
             session.flush()
@@ -242,10 +321,13 @@ class FundedTrialStore:
                     user_id=user_id,
                     actor_id=actor_id,
                     detail={
+                        "kind": kind,
+                        "billing_period_end": billing_period_end,
                         "allowance_micros": allowance_micros,
                         "expires_at": expires_at,
                         "capabilities": sorted(requested),
                         "max_concurrent_roots": max_concurrent_roots,
+                        "markup_percent": markup_percent,
                     },
                     now=now,
                 )
@@ -254,30 +336,64 @@ class FundedTrialStore:
 
         return run_write_transaction(self._session_immediate, "upsert_funded_trial_grant", write)
 
-    def revoke_grant(self, user_id: str, *, actor_id: str | None) -> TrialGrant | None:
-        """Block new spending for the account. Open reservations stay settleable."""
+    def revoke_grant(
+        self, user_id: str, *, actor_id: str | None, kind: str = "trial"
+    ) -> TrialGrant | None:
+        """Block new spending from the account's latest grant of *kind*.
+
+        Open reservations stay settleable.
+        """
         now = self._now()
 
         def write(session: Session) -> TrialGrant | None:
-            row = self._grant_row(session, user_id)
+            row = self._grant_row(session, user_id, kind)
             if row is None:
                 return None
-            if row.revoked_at is None:
-                row.revoked_at = now
-                row.generation += 1
-                session.add(
-                    _event_row(
-                        event="revoked",
-                        grant_id=row.id,
-                        user_id=user_id,
-                        actor_id=actor_id,
-                        detail=None,
-                        now=now,
-                    )
-                )
+            self._revoke_row(session, row, actor_id=actor_id, now=now)
             return _to_grant(row)
 
         return run_write_transaction(self._session_immediate, "revoke_funded_trial_grant", write)
+
+    def revoke_grants(
+        self, user_id: str, *, kinds: Iterable[str], actor_id: str | None
+    ) -> list[TrialGrant]:
+        """Revoke every unrevoked grant of the given kinds, e.g. on cancellation."""
+        now = self._now()
+        wanted = frozenset(kinds)
+
+        def write(session: Session) -> list[TrialGrant]:
+            rows = session.scalars(
+                select(SqlFundedTrialGrant).where(
+                    SqlFundedTrialGrant.workspace_id == current_workspace_id(),
+                    SqlFundedTrialGrant.user_id == user_id,
+                    SqlFundedTrialGrant.kind.in_(sorted(wanted)),
+                    SqlFundedTrialGrant.revoked_at.is_(None),
+                )
+            ).all()
+            for row in rows:
+                self._revoke_row(session, row, actor_id=actor_id, now=now)
+            return [_to_grant(row) for row in rows]
+
+        return run_write_transaction(self._session_immediate, "revoke_funded_trial_grants", write)
+
+    @staticmethod
+    def _revoke_row(
+        session: Session, row: SqlFundedTrialGrant, *, actor_id: str | None, now: int
+    ) -> None:
+        if row.revoked_at is not None:
+            return
+        row.revoked_at = now
+        row.generation += 1
+        session.add(
+            _event_row(
+                event="revoked",
+                grant_id=row.id,
+                user_id=row.user_id,
+                actor_id=actor_id,
+                detail={"kind": row.kind},
+                now=now,
+            )
+        )
 
     def reserve(
         self,
@@ -290,9 +406,12 @@ class FundedTrialStore:
         root_session_id: str | None = None,
         session_id: str | None = None,
         detail: dict[str, Any] | None = None,
+        grant_id: str | None = None,
     ) -> TrialCharge:
         """Atomically hold ``amount_micros`` of the account's allowance.
 
+        ``amount_micros`` is the list-price cost; the grant's markup is added
+        before the hold. Without ``grant_id`` the account's trial grant pays.
         Replaying ``idempotency_key`` returns the existing charge without a
         second hold. Denials are audited and raise :class:`FundedTrialDenied`.
         """
@@ -301,12 +420,18 @@ class FundedTrialStore:
         if amount_micros <= 0:
             raise ValueError("A reservation must be positive")
         now = self._now()
+        list_micros = amount_micros
 
         def write(session: Session) -> TrialCharge:
-            row = self._grant_row(session, user_id)
-            if row is None:
+            row = (
+                self._grant_row_by_id(session, grant_id)
+                if grant_id is not None
+                else self._grant_row(session, user_id)
+            )
+            if row is None or row.user_id != user_id:
                 raise FundedTrialDenied("no_grant", "This account has no funded trial.")
             grant = _to_grant(row)
+            amount_micros = apply_markup(list_micros, grant.markup_percent)
             existing = session.scalars(
                 select(SqlFundedTrialCharge).where(
                     SqlFundedTrialCharge.workspace_id == current_workspace_id(),
@@ -349,12 +474,18 @@ class FundedTrialStore:
                     "The funded trial allowance cannot cover this operation.",
                 )
             if root_session_id is not None:
+                # Concurrency is per account: a root funded by period credit and
+                # another by overage still count against the same limit.
+                account_grants = select(SqlFundedTrialGrant.id).where(
+                    SqlFundedTrialGrant.workspace_id == current_workspace_id(),
+                    SqlFundedTrialGrant.user_id == user_id,
+                )
                 open_roots = set(
                     session.scalars(
                         select(SqlFundedTrialCharge.root_session_id)
                         .where(
                             SqlFundedTrialCharge.workspace_id == current_workspace_id(),
-                            SqlFundedTrialCharge.grant_id == grant.id,
+                            SqlFundedTrialCharge.grant_id.in_(account_grants),
                             SqlFundedTrialCharge.status == "reserved",
                             SqlFundedTrialCharge.root_session_id.is_not(None),
                         )
@@ -369,6 +500,10 @@ class FundedTrialStore:
                         "concurrency",
                         "Another funded workflow is already running for this account.",
                     )
+            recorded_detail = dict(detail or {})
+            if grant.markup_percent:
+                recorded_detail["list_micros"] = list_micros
+                recorded_detail["markup_percent"] = grant.markup_percent
             charge = SqlFundedTrialCharge(
                 id=f"ftc_{uuid.uuid4().hex}",
                 grant_id=grant.id,
@@ -379,7 +514,7 @@ class FundedTrialStore:
                 session_id=session_id,
                 reserved_micros=amount_micros,
                 settled_micros=None,
-                detail=json.dumps(detail, sort_keys=True) if detail else None,
+                detail=json.dumps(recorded_detail, sort_keys=True) if recorded_detail else None,
                 created_at=now,
                 settled_at=None,
             )
@@ -398,7 +533,8 @@ class FundedTrialStore:
                     "reason": denied.reason,
                     "capability": capability,
                     "kind": kind,
-                    "amount_micros": amount_micros,
+                    "amount_micros": list_micros,
+                    "grant_id": grant_id,
                     "root_session_id": root_session_id,
                 },
             )
@@ -415,6 +551,10 @@ class FundedTrialStore:
                 raise KeyError(charge_id)
             if row.status != "reserved":
                 return _to_charge(row)
+            grant_terms = self._grant_row_by_id(session, row.grant_id)
+            charged_micros = apply_markup(
+                settled_micros, grant_terms.markup_percent if grant_terms is not None else 0
+            )
             result = cast(
                 CursorResult[Any],
                 session.execute(
@@ -424,7 +564,7 @@ class FundedTrialStore:
                         SqlFundedTrialCharge.id == charge_id,
                         SqlFundedTrialCharge.status == "reserved",
                     )
-                    .values(status=status, settled_micros=settled_micros, settled_at=now)
+                    .values(status=status, settled_micros=charged_micros, settled_at=now)
                     .execution_options(synchronize_session=False)
                 ),
             )
@@ -437,11 +577,11 @@ class FundedTrialStore:
                     )
                     .values(
                         reserved_micros=SqlFundedTrialGrant.reserved_micros - row.reserved_micros,
-                        spent_micros=SqlFundedTrialGrant.spent_micros + settled_micros,
+                        spent_micros=SqlFundedTrialGrant.spent_micros + charged_micros,
                     )
                     .execution_options(synchronize_session=False)
                 )
-                if settled_micros > row.reserved_micros:
+                if charged_micros > row.reserved_micros:
                     grant_row = session.get(
                         SqlFundedTrialGrant, (current_workspace_id(), row.grant_id)
                     )
@@ -454,7 +594,7 @@ class FundedTrialStore:
                             detail={
                                 "charge_id": charge_id,
                                 "reserved_micros": row.reserved_micros,
-                                "settled_micros": settled_micros,
+                                "settled_micros": charged_micros,
                                 **(detail or {}),
                             },
                             now=now,
@@ -468,12 +608,79 @@ class FundedTrialStore:
     def settle(
         self, charge_id: str, actual_micros: int, *, detail: dict[str, Any] | None = None
     ) -> TrialCharge:
-        """Record measured cost once; later calls return the first settlement."""
+        """Record measured list-price cost once; later calls return the first settlement.
+
+        The grant's markup is added to ``actual_micros`` before it is spent.
+        """
         if actual_micros < 0:
             raise ValueError("A settled cost cannot be negative")
         return self._close(
             charge_id, status="settled", settled_micros=actual_micros, detail=detail
         )
+
+    def settled_unreported(self, *, kind: str, limit: int = 500) -> list[tuple[TrialCharge, str]]:
+        """Settled, non-zero charges on grants of *kind* not yet reported, with their owner."""
+        with self._session("select_unreported_funded_trial_charges") as session:
+            rows = session.execute(
+                select(SqlFundedTrialCharge, SqlFundedTrialGrant.user_id)
+                .join(
+                    SqlFundedTrialGrant,
+                    and_(
+                        SqlFundedTrialGrant.workspace_id == SqlFundedTrialCharge.workspace_id,
+                        SqlFundedTrialGrant.id == SqlFundedTrialCharge.grant_id,
+                    ),
+                )
+                .where(
+                    SqlFundedTrialCharge.workspace_id == current_workspace_id(),
+                    SqlFundedTrialGrant.kind == kind,
+                    SqlFundedTrialCharge.status == "settled",
+                    SqlFundedTrialCharge.settled_micros > 0,
+                    SqlFundedTrialCharge.reported_at.is_(None),
+                )
+                .order_by(SqlFundedTrialCharge.settled_at, SqlFundedTrialCharge.id)
+                .limit(limit)
+            )
+            return [(_to_charge(charge), user_id) for charge, user_id in rows]
+
+    def mark_reported(self, charge_id: str, *, report_ref: str) -> bool:
+        """Record that a charge reached the billing provider; ``False`` if already done."""
+        now = self._now()
+
+        def write(session: Session) -> bool:
+            result = cast(
+                CursorResult[Any],
+                session.execute(
+                    update(SqlFundedTrialCharge)
+                    .where(
+                        SqlFundedTrialCharge.workspace_id == current_workspace_id(),
+                        SqlFundedTrialCharge.id == charge_id,
+                        SqlFundedTrialCharge.reported_at.is_(None),
+                    )
+                    .values(reported_at=now, report_ref=report_ref)
+                    .execution_options(synchronize_session=False)
+                ),
+            )
+            return result.rowcount == 1
+
+        return run_write_transaction(self._session, "mark_funded_trial_charge_reported", write)
+
+    def recent_charges(self, user_id: str, *, limit: int = 20) -> list[TrialCharge]:
+        """Latest charges across all of the account's grants, newest first."""
+        with self._session("select_recent_funded_trial_charges") as session:
+            grant_ids = select(SqlFundedTrialGrant.id).where(
+                SqlFundedTrialGrant.workspace_id == current_workspace_id(),
+                SqlFundedTrialGrant.user_id == user_id,
+            )
+            rows = session.scalars(
+                select(SqlFundedTrialCharge)
+                .where(
+                    SqlFundedTrialCharge.workspace_id == current_workspace_id(),
+                    SqlFundedTrialCharge.grant_id.in_(grant_ids),
+                )
+                .order_by(SqlFundedTrialCharge.created_at.desc(), SqlFundedTrialCharge.id)
+                .limit(limit)
+            )
+            return [_to_charge(row) for row in rows]
 
     def release(self, charge_id: str) -> TrialCharge:
         """Return an unused reservation; only safe when nothing was dispatched."""
@@ -483,6 +690,18 @@ class FundedTrialStore:
         """Return one charge in the current workspace."""
         with self._session("select_funded_trial_charge") as session:
             row = session.get(SqlFundedTrialCharge, (current_workspace_id(), charge_id))
+            return _to_charge(row) if row is not None else None
+
+    def find_charge(self, grant_id: str, idempotency_key: str) -> TrialCharge | None:
+        """Return the charge a replayed key already created on *grant_id*, if any."""
+        with self._session("select_funded_trial_charge_by_key") as session:
+            row = session.scalars(
+                select(SqlFundedTrialCharge).where(
+                    SqlFundedTrialCharge.workspace_id == current_workspace_id(),
+                    SqlFundedTrialCharge.grant_id == grant_id,
+                    SqlFundedTrialCharge.idempotency_key == idempotency_key,
+                )
+            ).one_or_none()
             return _to_charge(row) if row is not None else None
 
     def open_charges(self, user_id: str) -> list[TrialCharge]:

@@ -581,6 +581,13 @@ class SqlFundedTrialGrant(OmnigentBase):
     :param generation: Term revision; gateway tokens from older revisions are rejected.
     :param expires_at: Unix epoch seconds after which nothing new may spend.
     :param revoked_at: Unix epoch seconds of revocation, ``NULL`` while active.
+    :param kind: ``trial`` (operator grant), ``period_credit`` (a billing
+        period's included usage) or ``overage`` (metered spend reported to
+        the billing provider).
+    :param billing_period_end: Period boundary for subscription grants;
+        ``0`` for trial grants so one account holds at most one trial.
+    :param markup_percent: Added to list prices when holding and settling;
+        ``0`` for trial grants.
     """
 
     __tablename__ = "funded_trial_grants"
@@ -594,6 +601,9 @@ class SqlFundedTrialGrant(OmnigentBase):
     )
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, server_default="trial")
+    billing_period_end: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    markup_percent: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     capabilities: Mapped[str] = mapped_column(String(256), nullable=False)
     allowance_micros: Mapped[int] = mapped_column(BigInteger, nullable=False)
     reserved_micros: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
@@ -609,7 +619,16 @@ class SqlFundedTrialGrant(OmnigentBase):
     __table_args__ = (
         CheckConstraint("allowance_micros >= 0", name="ck_funded_trial_grants_allowance"),
         CheckConstraint("reserved_micros >= 0", name="ck_funded_trial_grants_reserved"),
-        UniqueConstraint("workspace_id", "user_id", name="uq_funded_trial_grants_user"),
+        CheckConstraint(
+            "kind IN ('trial', 'period_credit', 'overage')", name="ck_funded_trial_grants_kind"
+        ),
+        UniqueConstraint(
+            "workspace_id",
+            "user_id",
+            "kind",
+            "billing_period_end",
+            name="uq_funded_trial_grants_user_kind_period",
+        ),
     )
 
 
@@ -621,6 +640,9 @@ class SqlFundedTrialCharge(OmnigentBase):
     :param kind: ``inference``, ``compute`` or ``storage``.
     :param status: ``reserved``, ``settled`` or ``released``.
     :param root_session_id: Session tree the charge belongs to.
+    :param reported_at: When a settled overage charge reached the billing
+        provider; ``NULL`` until reported.
+    :param report_ref: Provider-side identifier of that report.
     """
 
     __tablename__ = "funded_trial_charges"
@@ -644,6 +666,8 @@ class SqlFundedTrialCharge(OmnigentBase):
     detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[int] = mapped_column(Integer, nullable=False)
     settled_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reported_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    report_ref: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     __table_args__ = (
         CheckConstraint(
@@ -682,6 +706,83 @@ class SqlFundedTrialEvent(OmnigentBase):
     __table_args__ = (
         Index("ix_funded_trial_events_user", "workspace_id", "user_id", "created_at"),
     )
+
+
+class SqlBillingAccount(OmnigentBase):
+    """One account's seat subscription as mirrored from the billing provider.
+
+    The provider owns money (customer, subscription, invoices, cards); this
+    row records what the server needs to admit spending: the subscription's
+    status, its current period and the user's overage preferences. Usage is
+    held and settled in the shared funded-trial ledger as ``period_credit``
+    and ``overage`` grants keyed by ``period_end``.
+
+    :param plan: Plan key from the billing configuration, e.g. ``pro``.
+    :param seat_status: ``active``, ``past_due``, ``canceled`` or ``none``.
+    :param seats: Licensed seat quantity on the subscription.
+    :param period_start: Current period start (epoch seconds), ``NULL`` before
+        the first paid invoice.
+    :param period_end: Current period end (epoch seconds).
+    :param overage_cap_micros: Per-period metered spend the user allows.
+    :param overage_enabled: Whether metered spend beyond the included credit
+        may be held at all.
+    """
+
+    __tablename__ = "billing_accounts"
+
+    workspace_id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        nullable=False,
+        server_default="0",
+        default=current_workspace_id,
+    )
+    user_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    stripe_customer_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    stripe_subscription_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    plan: Mapped[str] = mapped_column(String(32), nullable=False)
+    seat_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="none")
+    seats: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    period_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    period_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    overage_cap_micros: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    overage_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "seat_status IN ('none', 'active', 'past_due', 'canceled')",
+            name="ck_billing_accounts_seat_status",
+        ),
+        CheckConstraint("overage_cap_micros >= 0", name="ck_billing_accounts_overage_cap"),
+        Index("ix_billing_accounts_customer", "workspace_id", "stripe_customer_id"),
+    )
+
+
+class SqlBillingEvent(OmnigentBase):
+    """A billing provider webhook event, recorded before it is processed.
+
+    The provider event id is the primary key, so a redelivered event is a
+    no-op insert and processing stays idempotent across retries.
+
+    :param error: Last processing failure, ``NULL`` once processed.
+    """
+
+    __tablename__ = "billing_events"
+
+    workspace_id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        nullable=False,
+        server_default="0",
+        default=current_workspace_id,
+    )
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    type: Mapped[str] = mapped_column(String(64), nullable=False)
+    received_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    processed_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class SqlManagedComputeUsage(OmnigentBase):

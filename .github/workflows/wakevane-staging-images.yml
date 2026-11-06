@@ -21,7 +21,7 @@ jobs:
         include:
           - image: server
             target: runtime
-            extras: modal
+            extras: modal,billing
           - image: host
             target: host
             extras: ''

@@ -48,6 +48,8 @@ _DENIAL_STATUS = {
     "invalid_token": 401,
     "token_expired": 401,
     "allowance_exhausted": 402,
+    "subscription_required": 402,
+    "past_due": 402,
     "concurrency": 429,
     "unconfigured": 503,
 }
@@ -312,7 +314,7 @@ def create_funded_trial_router(
         hold = policy.config.inference_hold_micros(model, len(raw), max_tokens)
         try:
             charge = await asyncio.to_thread(
-                store.reserve,
+                policy.reserve,
                 claims.user_id,
                 capability="inference",
                 kind="inference",

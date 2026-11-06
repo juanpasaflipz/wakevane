@@ -142,7 +142,8 @@ export async function getMe(): Promise<CurrentAccount | null> {
 
 /** Body of POST /auth/register. */
 export interface RegisterRequest {
-  invite: string;
+  /** Invite token; omitted on deploys with open signup. */
+  invite?: string;
   username: string;
   password: string;
 }

@@ -39,6 +39,8 @@ class Feature(StrEnum):
     FUNDED_TRIAL = "funded_trial"
     EGM_CLOUD = "egm_cloud"
     EGM_CLOUD_CODING = "egm_cloud_coding"
+    BILLING = "billing"
+    WEB_ONLY = "web_only"
 
 
 @dataclass(frozen=True)
@@ -183,6 +185,24 @@ FEATURE_DEFINITIONS: tuple[FeatureDefinition, ...] = (
         review_by_release="0.26.0",
         # Clients read effective capabilities from the trial route, never this flag.
         frontend_visible=False,
+    ),
+    FeatureDefinition(
+        feature=Feature.BILLING,
+        description=(
+            "Seat billing through Stripe: /v1/billing routes, subscription-funded "
+            "period credit and overage grants, and the web Billing settings section"
+        ),
+        owner="server",
+        review_by_release="0.27.0",
+    ),
+    FeatureDefinition(
+        feature=Feature.WEB_ONLY,
+        description=(
+            "Browser-only product: non-admin accounts may only create managed cloud "
+            "sessions, and the web UI hides local host and CLI onboarding"
+        ),
+        owner="server",
+        review_by_release="0.27.0",
     ),
     FeatureDefinition(
         feature=Feature.SUBSCRIPTIONS_PAGE,

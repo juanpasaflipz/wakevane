@@ -72,7 +72,9 @@ export type FeatureKey =
   | "shims_page"
   | "subscriptions_page"
   | "egm_cloud"
-  | "egm_cloud_coding";
+  | "egm_cloud_coding"
+  | "billing"
+  | "web_only";
 
 /** Deployment-wide release-feature values advertised by the server. */
 export type FeatureValues = Record<string, boolean>;
@@ -98,6 +100,12 @@ export interface ServerInfo {
    * first admin.
    */
   needs_setup: boolean;
+  /**
+   * True when accounts mode accepts ``POST /auth/register`` without an
+   * invite, so the register page offers self-serve signup. Optional so
+   * fixtures predating the field keep type-checking; absent means off.
+   */
+  open_signup?: boolean;
   /**
    * True on Databricks/internal deployments (the server's internal lakebox
    * CLI is present). Gates Databricks-only UI hints — the "Databricks Lakebox"
@@ -301,6 +309,7 @@ export const FALLBACK_SERVER_INFO: ServerInfo = {
   single_user: false,
   login_url: null,
   needs_setup: false,
+  open_signup: false,
   databricks_features: false,
   managed_sandboxes_enabled: false,
   sandbox_provider: null,
@@ -395,6 +404,7 @@ export async function resolveServerInfo(): Promise<ServerInfo> {
           single_user: data.single_user === true,
           login_url: typeof data.login_url === "string" ? data.login_url : null,
           needs_setup: data.needs_setup === true,
+          open_signup: data.open_signup === true,
           databricks_features: data.databricks_features === true,
           managed_sandboxes_enabled: data.managed_sandboxes_enabled === true,
           durable_initial_input: data.durable_initial_input === true,

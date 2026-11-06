@@ -536,3 +536,20 @@ describe("custom agent settings availability", () => {
     });
   });
 });
+
+describe("Billing section", () => {
+  it("lists Billing right after Account only on deploys selling seats", () => {
+    const ids = (billingEnabled: boolean) =>
+      settingsNavGroups(true, false, false, false, false, false, false, billingEnabled)
+        .flatMap((g) => g.items)
+        .map((i) => i.id);
+    expect(ids(false)).not.toContain("billing");
+    expect(ids(true).slice(0, 2)).toEqual(["account", "billing"]);
+    // No login session → no Billing, even when the feature is on.
+    expect(
+      settingsNavGroups(false, false, false, false, false, false, false, true)
+        .flatMap((g) => g.items)
+        .map((i) => i.id),
+    ).not.toContain("billing");
+  });
+});

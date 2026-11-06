@@ -42,6 +42,10 @@ Env vars (all start with ``OMNIGENT_ACCOUNTS_``):
 - ``MAGIC_TTL_MINUTES`` — optional, default 10. Magic-link
   tokens are intentionally very short-lived since they're used
   for an immediate CLI→browser handoff.
+- ``OPEN_SIGNUP`` — optional, default off. When truthy,
+  ``POST /auth/register`` creates a non-admin account without an
+  invite, for a public product where paying is the gate rather
+  than an admin's invitation. Invites keep working alongside it.
 """
 
 from __future__ import annotations
@@ -68,6 +72,8 @@ class AccountsConfig:
         are redeemable for.
     :param magic_ttl_seconds: How long ``/auth/magic`` tokens
         are redeemable for. Short by design.
+    :param open_signup: Whether registration works without an
+        invite token (self-serve public signup).
     """
 
     cookie_secret: bytes
@@ -76,6 +82,7 @@ class AccountsConfig:
     init_admin_password: str | None
     invite_ttl_seconds: int
     magic_ttl_seconds: int
+    open_signup: bool = False
 
     @property
     def secure_cookies(self) -> bool:
@@ -143,6 +150,12 @@ class AccountsConfig:
         # unset for the same reason as the OIDC SCOPES fix
         # — docker compose ${VAR:-} pattern forwards the var as set-to-"".
         init_admin = os.environ.get("OMNIGENT_ACCOUNTS_INIT_ADMIN_PASSWORD") or None
+        open_signup = os.environ.get("OMNIGENT_ACCOUNTS_OPEN_SIGNUP", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
 
         return AccountsConfig(
             cookie_secret=cookie_secret,
@@ -151,4 +164,5 @@ class AccountsConfig:
             init_admin_password=init_admin,
             invite_ttl_seconds=invite_ttl_seconds,
             magic_ttl_seconds=magic_ttl_seconds,
+            open_signup=open_signup,
         )

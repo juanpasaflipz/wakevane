@@ -193,6 +193,9 @@ class ErrorCode:
         bound anywhere), which no re-addressing can fix.
     :cvar UNAUTHORIZED: No valid authentication credentials (HTTP 401).
     :cvar FORBIDDEN: Authenticated but insufficient permissions (HTTP 403).
+    :cvar PAYMENT_REQUIRED: The account's funding cannot cover the request:
+        no seat subscription, a past-due seat or exhausted credit (HTTP 402).
+        The web UI maps it to an upgrade or top-up prompt.
     :cvar RUNNER_CAPABILITY_MISMATCH: The selected runner cannot
         spawn the requested harness kind (HTTP 503).
     :cvar HARNESS_NOT_CONFIGURED: The session's harness is not
@@ -240,6 +243,7 @@ class ErrorCode:
 
     UNAUTHORIZED = "unauthorized"
     FORBIDDEN = "forbidden"
+    PAYMENT_REQUIRED = "payment_required"
     NOT_FOUND = "not_found"
     INVALID_INPUT = "invalid_input"
     ALREADY_EXISTS = "already_exists"
@@ -277,6 +281,7 @@ SESSION_AGENT_BUNDLE_MISSING_MESSAGE = (
 _CODE_TO_HTTP_STATUS: dict[str, int] = {
     ErrorCode.UNAUTHORIZED: 401,
     ErrorCode.FORBIDDEN: 403,
+    ErrorCode.PAYMENT_REQUIRED: 402,
     ErrorCode.NOT_FOUND: 404,
     ErrorCode.INVALID_INPUT: 400,
     ErrorCode.ALREADY_EXISTS: 409,
@@ -330,6 +335,7 @@ _CODE_TO_CATEGORY: dict[str, ErrorCategory] = {
     # rejection of a well-formed request and a schema-invalid request body.
     ErrorCode.UNAUTHORIZED: ErrorCategory.USER,
     ErrorCode.FORBIDDEN: ErrorCategory.USER,
+    ErrorCode.PAYMENT_REQUIRED: ErrorCategory.USER,
     ErrorCode.NOT_FOUND: ErrorCategory.USER,
     ErrorCode.INVALID_INPUT: ErrorCategory.USER,
     ErrorCode.ALREADY_EXISTS: ErrorCategory.USER,
@@ -399,6 +405,7 @@ _CODE_TO_IMPACT: dict[str, ErrorImpact] = {
     ErrorCode.UPSTREAM_CANCELLED: ErrorImpact.TRANSIENT,
     # A single rejected request; the session stays healthy and usable.
     ErrorCode.FORBIDDEN: ErrorImpact.BENIGN,
+    ErrorCode.PAYMENT_REQUIRED: ErrorImpact.BENIGN,
     ErrorCode.UPSTREAM_PERMISSION_DENIED: ErrorImpact.BENIGN,
     ErrorCode.NOT_FOUND: ErrorImpact.BENIGN,
     ErrorCode.INVALID_INPUT: ErrorImpact.BENIGN,
@@ -428,6 +435,7 @@ def impact_for_code(code: str) -> ErrorImpact:
 _CODE_TO_PHASE: dict[str, ErrorPhase] = {
     ErrorCode.UNAUTHORIZED: ErrorPhase.REQUEST,
     ErrorCode.FORBIDDEN: ErrorPhase.REQUEST,
+    ErrorCode.PAYMENT_REQUIRED: ErrorPhase.REQUEST,
     ErrorCode.NOT_FOUND: ErrorPhase.REQUEST,
     ErrorCode.INVALID_INPUT: ErrorPhase.REQUEST,
     ErrorCode.ALREADY_EXISTS: ErrorPhase.REQUEST,

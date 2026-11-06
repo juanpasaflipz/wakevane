@@ -11378,6 +11378,35 @@ async def _resolve_native_smart_routing(
     return native_agent.agent_name, model, verdict, None
 
 
+async def _require_managed_host_when_web_only(
+    request: Request,
+    host_type: str | None,
+    user_id: str | None,
+    permission_store: PermissionStore | None,
+) -> None:
+    """Refuse local hosts and runners for members on a browser-only deployment.
+
+    Operators keep every host type so they can run diagnostics; everyone
+    else is limited to managed cloud sandboxes, which the server funds and
+    meters. Checked before any lookup so a refused create touches nothing.
+    """
+    if host_type == "managed" or user_id is None:
+        return
+    from omnigent.server.feature_flags import Feature
+
+    flags = getattr(request.app.state, "feature_flags", None)
+    if flags is None or not flags.enabled(Feature.WEB_ONLY):
+        return
+    is_admin = permission_store is not None and await asyncio.to_thread(
+        permission_store.is_admin, user_id
+    )
+    if not is_admin:
+        raise OmnigentError(
+            "This deployment runs sessions in managed cloud sandboxes only",
+            code=ErrorCode.FORBIDDEN,
+        )
+
+
 async def _create_session_from_existing_agent(
     conversation_store: ConversationStore,
     agent_store: AgentStore,
@@ -11445,6 +11474,7 @@ async def _create_session_from_existing_agent(
 
     _reject_reserved_cost_control_label_seed(body.labels)
     _reject_server_reserved_label_seed(body.labels)
+    await _require_managed_host_when_web_only(request, body.host_type, user_id, permission_store)
 
     agent = await validate_session_agent(
         user_id=user_id,
@@ -11731,7 +11761,10 @@ async def _create_session_from_existing_agent(
 
     if body.host_type == "managed":
         from omnigent.server.egm_coding import CODING_CAPABILITY, coding_binding
-        from omnigent.server.funded_trial import require_launch_eligibility
+        from omnigent.server.funded_trial import (
+            denial_error_code,
+            require_launch_eligibility,
+        )
         from omnigent.server.funded_trial_store import FundedTrialDenied
 
         try:
@@ -11743,7 +11776,7 @@ async def _create_session_from_existing_agent(
                 (CODING_CAPABILITY,) if coding_binding(server_labels) is not None else (),
             )
         except FundedTrialDenied as denied:
-            raise OmnigentError(denied.message, code=ErrorCode.FORBIDDEN) from None
+            raise OmnigentError(denied.message, code=denial_error_code(denied.reason)) from None
 
     inference_snapshot = None
     selection_spec = None

@@ -93,12 +93,13 @@ class LoginRequest(BaseModel):
 class RegisterRequest(BaseModel):
     """Body of ``POST /auth/register``.
 
-    :param invite: The invite token from the copyable URL.
+    :param invite: The invite token from the copyable URL. Omitted only on
+        deployments with open signup enabled.
     :param username: The user's chosen username.
     :param password: The user's chosen password.
     """
 
-    invite: str = Field(min_length=1, max_length=128)
+    invite: str | None = Field(default=None, min_length=1, max_length=128)
     username: str = Field(min_length=1, max_length=64, pattern=_USERNAME_RE)
     password: str = Field(min_length=_MIN_PASSWORD_LENGTH, max_length=1024)
 
@@ -484,17 +485,24 @@ def create_accounts_auth_router(
             return JSONResponse(status_code=409, content={"error": "username already taken"})
 
         now = int(time.time())
-        token = account_store.redeem_token(body.invite, kind="invite", now_epoch_seconds=now)
-        if token is None:
-            # Don't distinguish missing / expired / already-redeemed
-            # — keeps the route opaque to brute-force token guessing.
-            return JSONResponse(status_code=400, content={"error": "invite invalid or expired"})
+        invited_is_admin = False
+        if body.invite is not None:
+            token = account_store.redeem_token(body.invite, kind="invite", now_epoch_seconds=now)
+            if token is None:
+                # Don't distinguish missing / expired / already-redeemed
+                # — keeps the route opaque to brute-force token guessing.
+                return JSONResponse(
+                    status_code=400, content={"error": "invite invalid or expired"}
+                )
+            invited_is_admin = token.invited_is_admin
+        elif not config.open_signup:
+            return JSONResponse(status_code=400, content={"error": "invite required"})
 
         try:
             user = account_store.create_user_with_password(
                 username,
                 hash_password(body.password),
-                is_admin=token.invited_is_admin,
+                is_admin=invited_is_admin,
             )
         except ValueError:
             # Genuine race against another registrant using the same
@@ -532,9 +540,10 @@ def create_accounts_auth_router(
             max_age_seconds=_session_max_age,
         )
         _logger.info(
-            "auth/register: %s created via invite (admin=%s)",
+            "auth/register: %s created via %s (admin=%s)",
             _redact_for_log(username),
-            token.invited_is_admin,
+            "invite" if body.invite is not None else "open signup",
+            invited_is_admin,
         )
         return resp
 

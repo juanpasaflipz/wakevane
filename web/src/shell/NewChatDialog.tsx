@@ -758,6 +758,15 @@ export function sessionsSharingDirectory(
  *   when the body isn't a recognizable error shape.
  */
 export async function describeCreateError(res: Response): Promise<string> {
+  const message = await describeCreateErrorBody(res);
+  // 402: the account must subscribe, pay a past-due invoice or raise its overage
+  // cap before the server will fund another managed launch.
+  return res.status === 402
+    ? `${message} Open Settings › Billing to subscribe or raise your overage cap.`
+    : message;
+}
+
+async function describeCreateErrorBody(res: Response): Promise<string> {
   try {
     const body: unknown = await res.json();
     if (body && typeof body === "object") {
@@ -2465,7 +2474,9 @@ export function NewChatLandingScreen() {
   // host — the server provisions a sandbox host at create time
   // (host_type: "managed"), so no host_id or workspace is sent.
   const [sandboxSelected, setSandboxSelected] = useState(
-    () => restoredDraft?.sandboxSelected ?? false,
+    // A browser-only deploy (`web_only`) runs everything in managed sandboxes,
+    // so the sandbox pick is the default rather than a connected host.
+    () => restoredDraft?.sandboxSelected ?? isFeatureEnabled(info, "web_only"),
   );
   // Provider the sandbox pick launches on. Seeded to the sticky last pick (or
   // the first offered row) once the picker rows load; null both before that

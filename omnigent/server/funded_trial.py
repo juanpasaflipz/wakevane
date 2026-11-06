@@ -151,8 +151,26 @@ class GatewayClaims:
     generation: int
 
 
+PAYMENT_DENIALS: frozenset[str] = frozenset(
+    {"subscription_required", "allowance_exhausted", "past_due"}
+)
+
+
+def denial_error_code(reason: str) -> str:
+    """HTTP error code for a funding denial: 402 when money fixes it, else 403."""
+    from omnigent.errors import ErrorCode
+
+    return ErrorCode.PAYMENT_REQUIRED if reason in PAYMENT_DENIALS else ErrorCode.FORBIDDEN
+
+
 class FundedTrialPolicy:
-    """Single decision point shared by launch paths and the inference gateway."""
+    """Single decision point shared by launch paths and the inference gateway.
+
+    Funding comes from the account's operator trial grant first, then from
+    its seat subscription's period credit and overage grants when the
+    :mod:`omnigent.server.billing` policy is attached. A hold is taken from
+    exactly one grant; when a grant cannot cover it, the next one is tried.
+    """
 
     def __init__(
         self,
@@ -162,10 +180,12 @@ class FundedTrialPolicy:
         config: FundedTrialConfig,
         environ: Mapping[str, str] | None = None,
         clock: Any = time.time,
+        billing: Any | None = None,
     ) -> None:
         self.enabled = enabled
         self.store = store
         self.config = config
+        self.billing = billing
         self._environ = environ if environ is not None else os.environ
         self._clock = clock
 
@@ -191,46 +211,134 @@ class FundedTrialPolicy:
             raise FundedTrialDenied("disabled", "The funded trial is not enabled.")
         return self.store
 
+    def _billing_enabled(self) -> bool:
+        return bool(self.billing is not None and getattr(self.billing, "enabled", False))
+
+    def candidate_grants(self, user_id: str) -> list[TrialGrant]:
+        """Every grant that could fund the account, trial first, active or not."""
+        store = self._require_store()
+        grants: list[TrialGrant] = []
+        trial = store.get_grant(user_id, "trial")
+        if trial is not None:
+            grants.append(trial)
+        billing = self.billing
+        if billing is not None and billing.enabled:
+            grants.extend(billing.funding_grants(user_id))
+        return grants
+
+    def _usable(self, grants: list[TrialGrant], capability: str) -> list[TrialGrant]:
+        now = int(self._clock())
+        return [
+            grant
+            for grant in grants
+            if grant.inactive_reason(now) is None and capability in grant.capabilities
+        ]
+
+    def _denial_reason(self, user_id: str, grants: list[TrialGrant], capability: str) -> str:
+        """Stable reason when no candidate grant can fund *capability*."""
+        now = int(self._clock())
+        if not self._billing_enabled():
+            if not grants:
+                return "no_grant"
+            return grants[0].inactive_reason(now) or "capability"
+        for grant in grants:
+            if grant.inactive_reason(now) is None and capability not in grant.capabilities:
+                return "capability"
+        billing = self.billing
+        assert billing is not None
+        return str(billing.denial_reason(user_id))
+
     def active_grant(self, user_id: str | None, capability: str) -> TrialGrant:
-        """Return the caller's usable grant or raise a denial (audited)."""
+        """Return the first grant that can fund *capability* or raise a denial (audited)."""
         store = self._require_store()
         if not user_id:
             raise FundedTrialDenied("no_grant", "Funded access requires a signed-in account.")
-        grant = store.get_grant(user_id)
-        reason: str | None
-        if grant is None:
-            reason = "no_grant"
-        else:
-            reason = grant.inactive_reason(int(self._clock()))
-            if reason is None and capability not in grant.capabilities:
-                reason = "capability"
-        if reason is not None:
-            store.record_event(
-                "denied",
-                user_id=user_id,
-                actor_id=user_id,
-                detail={"reason": reason, "capability": capability},
+        grants = self.candidate_grants(user_id)
+        usable = self._usable(grants, capability)
+        if usable:
+            return usable[0]
+        reason = self._denial_reason(user_id, grants, capability)
+        store.record_event(
+            "denied",
+            user_id=user_id,
+            actor_id=user_id,
+            detail={"reason": reason, "capability": capability},
+        )
+        raise FundedTrialDenied(reason, f"Funded access denied: {reason}.")
+
+    def reserve(
+        self,
+        user_id: str | None,
+        *,
+        capability: str,
+        kind: str,
+        amount_micros: int,
+        idempotency_key: str,
+        root_session_id: str | None = None,
+        session_id: str | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> TrialCharge:
+        """Hold list-price ``amount_micros`` on the first grant that can cover it.
+
+        A replayed ``idempotency_key`` returns the original charge from
+        whichever grant holds it. Only an exhausted allowance moves on to the
+        next grant; every other denial is final.
+        """
+        store = self._require_store()
+        grants = self._usable(self.candidate_grants(user_id), capability) if user_id else []
+        if not user_id or not grants:
+            self.active_grant(user_id, capability)  # raises the audited denial
+            raise AssertionError("unreachable")
+        for grant in grants:
+            replay = store.find_charge(grant.id, idempotency_key)
+            if replay is not None:
+                return replay
+        last: FundedTrialDenied | None = None
+        for grant in grants:
+            try:
+                return store.reserve(
+                    user_id,
+                    capability=capability,
+                    kind=kind,
+                    amount_micros=amount_micros,
+                    idempotency_key=idempotency_key,
+                    root_session_id=root_session_id,
+                    session_id=session_id,
+                    detail=detail,
+                    grant_id=grant.id,
+                )
+            except FundedTrialDenied as denied:
+                if denied.reason != "allowance_exhausted":
+                    raise
+                last = denied
+        assert last is not None
+        if self._billing_enabled() and all(grant.kind != "trial" for grant in grants):
+            raise FundedTrialDenied(
+                "allowance_exhausted",
+                "Included credit is used up; raise the overage cap to continue.",
             )
-            raise FundedTrialDenied(reason, f"Funded access denied: {reason}.")
-        assert grant is not None
-        return grant
+        raise last
 
     def summary(self, user_id: str | None) -> dict[str, Any]:
         """The caller's own effective capabilities and remaining allowance."""
         if not self.enabled or self.store is None or not user_id:
             return {"enabled": False, "capabilities": [], "remaining_usd": 0.0}
-        grant = self.store.get_grant(user_id)
-        if grant is None:
+        grants = self.candidate_grants(user_id)
+        if not grants:
             return {"enabled": False, "capabilities": [], "remaining_usd": 0.0}
-        inactive = grant.inactive_reason(int(self._clock()))
+        now = int(self._clock())
+        active = [grant for grant in grants if grant.inactive_reason(now) is None]
+        grant = active[0] if active else grants[0]
+        inactive = grant.inactive_reason(now)
         return {
             "enabled": inactive is None,
             "status": inactive or "active",
+            "funding": grant.kind,
             "capabilities": sorted(grant.capabilities) if inactive is None else [],
             "allowance_usd": grant.allowance_micros / MICROS_PER_USD,
             "spent_usd": grant.spent_micros / MICROS_PER_USD,
             "reserved_usd": grant.reserved_micros / MICROS_PER_USD,
-            "remaining_usd": grant.remaining_micros / MICROS_PER_USD,
+            "remaining_usd": sum(g.remaining_micros for g in active) / MICROS_PER_USD,
             "expires_at": grant.expires_at,
             "models": sorted(self.config.model_pricing),
         }
@@ -260,7 +368,7 @@ class FundedTrialPolicy:
                 "unpriced_compute", f"No approved compute price for {provider!r}."
             )
         lifetime = min(hours or self.config.max_compute_hours, self.config.max_compute_hours)
-        return store.reserve(
+        return self.reserve(
             user_id,
             capability="compute",
             kind="compute",
@@ -358,9 +466,17 @@ class FundedTrialPolicy:
             raise invalid from None
         if result.expires_at <= int(self._clock()):
             raise FundedTrialDenied("token_expired", "The gateway credential has expired.")
-        grant = self.active_grant(result.user_id, "inference")
-        # Revocation or new terms bump the generation, retiring older tokens.
-        if grant.id != result.grant_id or grant.generation != result.generation:
+        store = self._require_store()
+        minted = store.get_grant_by_id(result.grant_id)
+        if minted is None or minted.user_id != result.user_id:
+            raise invalid
+        active = self.active_grant(result.user_id, "inference")
+        if minted.kind == "trial":
+            # Revocation or new terms bump the generation, retiring older tokens.
+            if active.id != minted.id or active.generation != result.generation:
+                raise invalid
+        elif minted.generation != result.generation and minted.revoked_at is not None:
+            # A canceled subscription revokes its grants; the token dies with them.
             raise invalid
         return result
 
