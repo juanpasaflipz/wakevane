@@ -70,6 +70,18 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
 
+BASELINE_EXCLUDE = ":(exclude)docs/designs/egm"
+# Reviewers reproduce the baseline from this text; it is not the hash of any file or git object.
+BASELINE_METHOD = (
+    "sha256 over three byte strings concatenated: (1) `git status --porcelain=v1 -z "
+    "--untracked-files=all -- . ':(exclude)docs/designs/egm'`, (2) `git diff --cached "
+    "--binary -- . ':(exclude)docs/designs/egm'`, (3) canonical JSON (sorted keys, "
+    "separators ',' and ':') of baseline_dirty_files, which maps each modified or "
+    "untracked path to the sha256 of its bytes or 'deleted'. A clean checkout yields "
+    "sha256 of the two bytes '{}' = 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a."
+)
+
+
 class Packet(StrictModel):
     stage: Literal["comprehension", "critic", "readiness"]
     spec_path: str
@@ -80,6 +92,9 @@ class Packet(StrictModel):
     source_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
     evidence: dict[str, str]
     baseline_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    # Defaults keep revisions frozen before these fields existed loadable.
+    baseline_method: str = BASELINE_METHOD
+    baseline_dirty_files: dict[str, str] = Field(default_factory=dict)
 
 
 class Decision(StrictModel):
@@ -195,15 +210,16 @@ class ReviewLedger:
         ).stdout
 
     def _baseline(self) -> str:
-        # Include index changes and all dirty/untracked bytes, excluding design outputs.
+        return self._baseline_parts()[0]
+
+    def _baseline_parts(self) -> tuple[str, dict[str, str]]:
+        """Worktree-state digest and the dirty-file inventory it covers.
+
+        Includes index changes and all dirty/untracked bytes, excluding design
+        outputs; see ``BASELINE_METHOD`` for the reviewer-facing formula.
+        """
         status = self._git(
-            "status",
-            "--porcelain=v1",
-            "-z",
-            "--untracked-files=all",
-            "--",
-            ".",
-            ":(exclude)docs/designs/egm",
+            "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", ".", BASELINE_EXCLUDE
         )
         names = self._git(
             "ls-files",
@@ -213,17 +229,14 @@ class ReviewLedger:
             "-z",
             "--",
             ".",
-            ":(exclude)docs/designs/egm",
+            BASELINE_EXCLUDE,
         ).split(b"\0")
         files = {}
         for name in filter(None, names):
             path = self.workspace / name.decode("utf-8")
             files[str(path)] = digest(self._read(str(path))) if path.exists() else "deleted"
-        return digest(
-            status
-            + self._git("diff", "--cached", "--binary", "--", ".", ":(exclude)docs/designs/egm")
-            + _json(files).encode()
-        )
+        cached = self._git("diff", "--cached", "--binary", "--", ".", BASELINE_EXCLUDE)
+        return digest(status + cached + _json(files).encode()), files
 
     def freeze(self, spec_path: str, contract_path: str, evidence_paths: list[str]) -> dict:
         spec = self._read(spec_path, artifact=True)
@@ -252,6 +265,7 @@ class ReviewLedger:
                 "outside docs/designs/egm. For new-file designs, use existing source, "
                 "configuration or README files; do not create placeholder code/tests."
             )
+        baseline, dirty_files = self._baseline_parts()
         packet = Packet(
             stage="comprehension",
             spec_path=spec_path,
@@ -261,7 +275,8 @@ class ReviewLedger:
             repository=str(self.workspace),
             source_revision=self._git("rev-parse", "HEAD").decode().strip(),
             evidence={p: digest(self._read(p)) for p in evidence_paths},
-            baseline_sha256=self._baseline(),
+            baseline_sha256=baseline,
+            baseline_dirty_files=dirty_files,
         )
         value = {
             "packet": packet.model_dump(),

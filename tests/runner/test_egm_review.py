@@ -640,3 +640,28 @@ async def test_runner_stream_replaces_only_coordinator_prose(review, monkeypatch
         assert fabricated not in json.dumps(histories)
     else:
         assert fabricated in response.text
+
+
+def test_packet_explains_the_baseline_and_lists_dirty_files(review):
+    import hashlib
+
+    from omnigent.runner.egm_review import BASELINE_METHOD, ReviewLedger
+
+    ledger, packet, spec, contract, source = review
+    # A clean checkout's baseline is the digest of canonical "{}", as the method says.
+    assert packet["baseline_sha256"] == hashlib.sha256(b"{}").hexdigest()
+    assert packet["baseline_dirty_files"] == {}
+    assert packet["baseline_method"] == BASELINE_METHOD
+    assert packet["baseline_sha256"] in BASELINE_METHOD
+    # Dirty inputs are inventoried by path and content hash, and change the digest.
+    dirty = source.parent / "notes.txt"
+    dirty.write_bytes(b"scratch\n")
+    revised = spec.with_name("r2.md")
+    revised.write_text(spec.read_text() + "\nRevised.\n")
+    fresh = ReviewLedger("root", ledger.workspace, root=ledger.path.parent)
+    later = fresh.freeze(str(revised), str(contract), [str(source)])["packet"]
+    assert later["baseline_dirty_files"] == {str(dirty): hashlib.sha256(b"scratch\n").hexdigest()}
+    assert later["baseline_sha256"] != packet["baseline_sha256"]
+    # Design outputs never count as dirt, so the first revision stays verifiable.
+    dirty.unlink()
+    assert fresh.status()["revision"] == 2

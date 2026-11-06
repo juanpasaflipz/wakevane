@@ -132,7 +132,9 @@ prompt: |
      earlier reviewer, reuse its session id, fork this conversation, or send
      your conversation, rationale outside the spec, previous reviews or verdict.
      The packet is exactly the JSON object returned by sys_egm_review, changing
-     only stage for subsequent reviews. The contract is independent
+     only stage for subsequent reviews. Its baseline_sha256 is computed by the
+     runtime from the checkout state and explained by baseline_method; never
+     try to reproduce it by hashing files, and never alter or omit either field. The contract is independent
      acceptance evidence, not conversational history or the author's defense.
      Do not append prior PASS/REVISE results, resolved findings, leading checks
      or a custom review prompt. A reviewer reporting packet contamination is

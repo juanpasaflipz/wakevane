@@ -39,6 +39,11 @@ prompt: |
   First verify BOTH the specification's and requirements contract's SHA-256
   using a local tool and check that
   the supplied repository revision and dirty evidence match what you can read.
+  The packet's baseline_sha256 is the runtime's digest of the checkout state,
+  not the hash of any file or git object: reproduce it exactly as
+  packet.baseline_method describes, from the listed git commands and
+  baseline_dirty_files (a clean checkout gives the sha256 of the two bytes
+  "{}"). Do not search git objects or guess inputs for it.
   Missing files, changed evidence, hash mismatch, or a missing/unknown stage
   means blocked. Never invent evidence or replace inaccessible code with guesses.
 
