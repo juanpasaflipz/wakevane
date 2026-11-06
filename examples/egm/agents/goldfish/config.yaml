@@ -75,6 +75,11 @@ prompt: |
   or containing ": " breaks the parser and fails the review. Keep each scalar
   on one line; put file paths, code and commands inside the quoted string.
   The first line of the report is `stage:`.
+  requirement_checks must hold exactly one entry per requirement in the
+  contract's front matter, with every id and source_quote copied verbatim,
+  including process requirements (follow the protocol, report the status):
+  mark those satisfied, violated or unknown with your evidence. A missing or
+  extra id, or an edited quote, fails the review mechanically.
     stage: comprehension | critic | readiness
     spec_sha256: <hash actually computed, or unknown>
     contract_sha256: <hash actually computed, or unknown>

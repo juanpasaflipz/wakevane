@@ -665,3 +665,13 @@ def test_packet_explains_the_baseline_and_lists_dirty_files(review):
     # Design outputs never count as dirt, so the first revision stays verifiable.
     dirty.unlink()
     assert fresh.status()["revision"] == 2
+
+
+def test_report_fence_may_follow_prose_on_the_same_line():
+    from omnigent.runner.egm_review import _report_text
+
+    body = "stage: comprehension\nverdict: pass\n"
+    assert _report_text(f"Done checking.```yaml\n{body}```\n") == body
+    assert _report_text(f"Report:\n\n```yaml\n{body}```") == body
+    with pytest.raises(ValueError, match="exactly one"):
+        _report_text(f"```yaml\n{body}```\nand again ```yaml\n{body}```\n")

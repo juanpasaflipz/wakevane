@@ -48,7 +48,9 @@ def _yaml(text: str):
     return yaml.load(text, Loader=_UniqueYamlLoader)
 
 
-_YAML_FENCE = re.compile(r"^```yaml\n(.*?)^```[ \t]*$", re.MULTILINE | re.DOTALL)
+# The opening fence may follow prose on the same line (reviewers often write
+# "...report.```yaml"); the closing fence must start its own line.
+_YAML_FENCE = re.compile(r"```yaml[ \t]*\r?\n(.*?)^```[ \t]*$", re.MULTILINE | re.DOTALL)
 
 
 def _report_text(output: str) -> str:
