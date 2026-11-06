@@ -471,12 +471,13 @@ class ReviewLedger:
                 actual = {r.id: r.source_quote for r in report.requirement_checks}
                 if expected != actual or len(actual) != len(report.requirement_checks):
                     raise ValueError("Missing, duplicate or mismatched requirement checks")
+                # A reviewer-rated nonblocking finding is advice for the implementer,
+                # recorded with the report; only blocking findings, unsatisfied
+                # checks and limitations keep a pass from counting.
                 result["passed"] = (
                     report.verdict == "pass"
                     and all(c.status == "satisfied" for c in report.requirement_checks)
-                    and not any(
-                        f.severity == "blocking" or f.kind != "editorial" for f in report.findings
-                    )
+                    and not any(f.severity == "blocking" for f in report.findings)
                     and not report.limitations
                 )
                 result["report"] = report.model_dump()

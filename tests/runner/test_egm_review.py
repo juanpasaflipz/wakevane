@@ -161,8 +161,6 @@ def test_changed_inputs_invalidate_ready(review, artifact):
         "wrong_quote",
         "wrong_hash",
         "blocking",
-        "acceptance",
-        "behavior",
         "limitation",
         "executed",
         "malformed",
@@ -186,12 +184,12 @@ def test_false_pass_cannot_advance(review, fault):
         value["requirement_checks"][0]["source_quote"] = "Several assertions"
     elif fault == "wrong_hash":
         value["contract_sha256"] = "0" * 64
-    elif fault in {"blocking", "acceptance", "behavior"}:
+    elif fault == "blocking":
         value["findings"] = [
             {
                 "id": "f1",
-                "severity": "blocking" if fault == "blocking" else "nonblocking",
-                "kind": "editorial" if fault == "blocking" else fault,
+                "severity": "blocking",
+                "kind": "editorial",
                 "evidence": "acceptance section",
                 "problem": "Unresolved correction",
                 "requested_change": "Revise spec",
@@ -699,3 +697,27 @@ def test_freeze_refuses_artifacts_that_carry_review_history(review, history):
     # Design rationale without review references still freezes.
     revised.write_text(spec.read_text() + "\nRationale: the earlier draft was ambiguous.\n")
     assert fresh.freeze(str(revised), str(contract), [str(source)])["revision"] == 2
+
+
+@pytest.mark.parametrize("kind", ["acceptance", "behavior"])
+def test_nonblocking_findings_advance_and_stay_on_record(review, kind):
+    ledger, packet, *_ = review
+    child = dispatch(ledger, packet, "comprehension")
+    value = report(packet, "comprehension")
+    value["findings"] = [
+        {
+            "id": "f1",
+            "severity": "nonblocking",
+            "kind": kind,
+            "evidence": "acceptance section",
+            "problem": "Worth tightening before implementation",
+            "requested_change": "Reword the expected outcome",
+        }
+    ]
+    complete(ledger, child, value, "completed")
+    status = ledger.status()
+    passed = [r for r in status["reviews"] if r["stage"] == "comprehension"]
+    assert passed and passed[-1]["passed"] is True
+    # The next stage opens on the same revision; the advice travels with the report.
+    dispatch(ledger, packet, "critic")
+    assert status["revision"] == 1

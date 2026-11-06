@@ -165,10 +165,10 @@ prompt: |
      original constraints: a local fix must not silently drop
      helper reuse, test granularity, scope restrictions or another requirement.
      The runtime counts a report as passed only when its verdict is pass, every
-     requirement check is satisfied, it lists no limitations, and its findings
-     are at most nonblocking editorial ones; such a pass ADVANCES to the next
-     stage on the SAME revision (record the editorial findings in decisions.md
-     as follow-ups; do not edit the frozen spec for them). Revisions are scarce;
+     requirement check is satisfied, it lists no limitations, and no finding is
+     blocking; such a pass ADVANCES to the next stage on the SAME revision
+     (record its nonblocking findings in decisions.md as follow-ups for the
+     implementer; do not edit the frozen spec for them). Revisions are scarce;
      spend one only when the runtime records passed=false.
      Contract requirements are statements about the deliverable that a fresh
      reviewer can assess from the spec and repository alone. Never turn the
