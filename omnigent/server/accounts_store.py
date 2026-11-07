@@ -69,6 +69,7 @@ def _to_account(row: SqlUser) -> Account:
         last_login_at=row.last_login_at,
         has_password=row.password_hash is not None,
         account_generation=row.account_generation,
+        email=row.email,
     )
 
 
@@ -237,6 +238,7 @@ class SqlAlchemyAccountStore:
         password_hash: str,
         *,
         is_admin: bool = False,
+        email: str | None = None,
     ) -> Account:
         """Insert a user row with a password hash.
 
@@ -252,6 +254,8 @@ class SqlAlchemyAccountStore:
             crosses this boundary.
         :param is_admin: Admin flag at creation. Defaults False;
             the first-boot admin bootstrap passes True.
+        :param email: Optional contact address (already validated and
+            lowercased by the caller). Stored for follow-up only.
         :returns: The created :class:`Account`.
         :raises ValueError: If a user with this id already exists.
         """
@@ -264,6 +268,7 @@ class SqlAlchemyAccountStore:
             row = existing or SqlUser(id=user_id)
             row.is_admin = is_admin
             row.password_hash = password_hash
+            row.email = email
             row.created_at = now
             row.last_login_at = None
             row.deleted_at = None

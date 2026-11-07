@@ -24,12 +24,13 @@ password hash, not an IdP authorization code exchange.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import re
 import secrets
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
@@ -39,6 +40,8 @@ from omnigent.db.account_authority import bind_account_authority, target_account
 from omnigent.server.accounts_store import SqlAlchemyAccountStore
 from omnigent.server.admin_list import AdminList, promote_if_listed
 from omnigent.server.auth import _RESERVED_USERS, RESERVED_USER_LOCAL, UnifiedAuthProvider
+from omnigent.server.funded_trial import FundedTrialPolicy
+from omnigent.server.funded_trial_store import MICROS_PER_USD
 from omnigent.server.oidc import mint_session_cookie
 from omnigent.server.passwords import (
     InvalidPasswordError,
@@ -97,11 +100,14 @@ class RegisterRequest(BaseModel):
         deployments with open signup enabled.
     :param username: The user's chosen username.
     :param password: The user's chosen password.
+    :param email: Optional contact address, accepted on open signup only.
+        Stored for follow-up; it is never a login identity.
     """
 
     invite: str | None = Field(default=None, min_length=1, max_length=128)
     username: str = Field(min_length=1, max_length=64, pattern=_USERNAME_RE)
     password: str = Field(min_length=_MIN_PASSWORD_LENGTH, max_length=1024)
+    email: str | None = Field(default=None, max_length=254)
 
 
 class SetupRequest(BaseModel):
@@ -204,6 +210,21 @@ def _validate_username(username: str) -> str | None:
     return None
 
 
+_EMAIL_RE = r"[^@\s]+@[^@\s]+\.[^@\s]{2,}"
+
+
+def _normalize_email(email: str | None) -> tuple[str | None, str | None]:
+    """Return ``(normalized, error)``; an empty value means no address given."""
+    if email is None:
+        return None, None
+    norm = email.strip().lower()
+    if norm == "":
+        return None, None
+    if len(norm) > 254 or not re.fullmatch(_EMAIL_RE, norm):
+        return None, "email must look like name@example.com"
+    return norm, None
+
+
 def _redact_for_log(user_id: str) -> str:
     """Truncate a user id for log lines.
 
@@ -223,6 +244,7 @@ def create_accounts_auth_router(
     permission_store: PermissionStore | None = None,
     device_grant_store: DeviceGrantStore | None = None,
     scheduled_task_store: ScheduledTaskStore | None = None,
+    funded_trial: FundedTrialPolicy | None = None,
 ) -> APIRouter:
     """Build the ``/auth/*`` router for the accounts provider.
 
@@ -254,6 +276,8 @@ def create_accounts_auth_router(
     :param scheduled_task_store: When set, ``DELETE /auth/users/{id}``
         disarms the scheduler timers of the deleted user's tasks (the
         rows themselves are disabled by ``AccountStore.delete_user``).
+    :param funded_trial: When set and its config names a ``welcome_grant``,
+        every open-signup registration receives that trial grant.
     :returns: APIRouter to mount at ``/auth``.
     """
     if auth_provider._source != "accounts":
@@ -414,6 +438,7 @@ def create_accounts_auth_router(
                 "is_admin": user.is_admin,
                 "created_at": user.created_at,
                 "last_login_at": user.last_login_at,
+                "email": user.email,
             },
         )
 
@@ -479,6 +504,9 @@ def create_accounts_auth_router(
             return JSONResponse(status_code=400, content={"error": err})
 
         username = body.username.strip().lower()
+        email, email_err = _normalize_email(body.email)
+        if email_err is not None:
+            return JSONResponse(status_code=400, content={"error": email_err})
         if account_store.get_user(username) is not None:
             # Don't burn the invite — the user can retry with a
             # different name on the same URL.
@@ -503,11 +531,25 @@ def create_accounts_auth_router(
                 username,
                 hash_password(body.password),
                 is_admin=invited_is_admin,
+                # Invited accounts are reached through the inviter; only
+                # self-serve signups leave a contact address.
+                email=email if body.invite is None else None,
             )
         except ValueError:
             # Genuine race against another registrant using the same
             # invite — invite is now consumed, no recovery here.
             return JSONResponse(status_code=409, content={"error": "username already taken"})
+
+        welcome = None
+        if body.invite is None and funded_trial is not None:
+            # A failed welcome grant must never fail the registration:
+            # the account exists and an operator can grant by hand.
+            try:
+                welcome = await asyncio.to_thread(funded_trial.grant_welcome, username)
+            except Exception:
+                _logger.exception(
+                    "auth/register: welcome grant failed for %s", _redact_for_log(username)
+                )
 
         if user.account_generation is not None:
             bind_account_authority(username, user.account_generation)
@@ -524,14 +566,18 @@ def create_accounts_auth_router(
             provider="accounts",
             account_generation=user.account_generation,
         )
-        resp = JSONResponse(
-            status_code=200,
-            content={
-                "token": session_jwt,
-                "expires_in": _session_max_age,
-                "user": {"id": user.id, "is_admin": user.is_admin},
-            },
-        )
+        content: dict[str, Any] = {
+            "token": session_jwt,
+            "expires_in": _session_max_age,
+            "user": {"id": user.id, "is_admin": user.is_admin},
+        }
+        if welcome is not None:
+            content["welcome_grant"] = {
+                "allowance_usd": welcome.allowance_micros / MICROS_PER_USD,
+                "expires_at": welcome.expires_at,
+                "capabilities": sorted(welcome.capabilities),
+            }
+        resp = JSONResponse(status_code=200, content=content)
         _set_session_cookie(
             resp,
             session_jwt,
@@ -540,10 +586,12 @@ def create_accounts_auth_router(
             max_age_seconds=_session_max_age,
         )
         _logger.info(
-            "auth/register: %s created via %s (admin=%s)",
+            "auth/register: %s created via %s (admin=%s, email=%s, welcome=%s)",
             _redact_for_log(username),
             "invite" if body.invite is not None else "open signup",
             invited_is_admin,
+            email is not None,
+            welcome is not None,
         )
         return resp
 
@@ -748,6 +796,7 @@ def create_accounts_auth_router(
                         "created_at": u.created_at,
                         "last_login_at": u.last_login_at,
                         "has_password": u.has_password,
+                        "email": u.email,
                     }
                     for u in users
                 ]

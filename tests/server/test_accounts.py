@@ -2247,3 +2247,131 @@ def test_web_only_limits_members_to_managed_sessions(accounts_app_web_only: Test
     assert member.post("/v1/sessions", json={**body, "host_type": "managed"}).status_code == 404
     admin_response = admin.post("/v1/sessions", json=body)
     assert admin_response.status_code == 404, admin_response.json()
+
+
+# ── Open signup extras: contact email and welcome credit ─────────
+
+
+def test_open_signup_stores_optional_email(accounts_app_open_signup: TestClient) -> None:
+    """A self-serve signup may leave a contact address; it is normalized, optional, validated."""
+    app = accounts_app_open_signup
+    from fastapi.testclient import TestClient as _TC
+
+    created = _TC(app.app).post(
+        "/auth/register",
+        json={"username": "carol", "password": "aaaaaaaa", "email": " Carol@Example.COM "},
+    )
+    assert created.status_code == 200, created.json()
+    assert "welcome_grant" not in created.json()  # no funded trial on this deploy
+    me = _login(_TC(app.app), "carol", "aaaaaaaa").get("/auth/me").json()
+    assert me["email"] == "carol@example.com"
+
+    no_email = _TC(app.app).post(
+        "/auth/register", json={"username": "erin", "password": "aaaaaaaa"}
+    )
+    assert no_email.status_code == 200
+    assert _login(_TC(app.app), "erin", "aaaaaaaa").get("/auth/me").json()["email"] is None
+
+    bad = _TC(app.app).post(
+        "/auth/register", json={"username": "dave", "password": "aaaaaaaa", "email": "nope"}
+    )
+    assert bad.status_code == 400
+    assert "email" in bad.json()["error"]
+    assert (
+        _TC(app.app)
+        .post("/auth/login", json={"username": "dave", "password": "aaaaaaaa"})
+        .status_code
+        == 401
+    )
+
+    admin = _login(app, "admin", "admin-pw-12345")
+    token = admin.post("/auth/invite", json={}).json()["token"]
+    invited = _TC(app.app).post(
+        "/auth/register",
+        json={"invite": token, "username": "frank", "password": "cccccccc", "email": "f@x.io"},
+    )
+    assert invited.status_code == 200
+    members = {u["id"]: u for u in admin.get("/auth/users").json()["users"]}
+    assert members["carol"]["email"] == "carol@example.com"
+    assert members["erin"]["email"] is None
+    # Invited accounts are reached through their inviter; no address is kept.
+    assert members["frank"]["email"] is None
+
+
+@pytest.fixture
+def accounts_app_welcome_credit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[TestClient]:
+    """Open signup on a funded-trial deployment that configures a welcome grant."""
+    import json as _json
+
+    monkeypatch.setenv("OMNIGENT_ACCOUNTS_OPEN_SIGNUP", "1")
+    monkeypatch.setenv("OMNIGENT_FEATURES", "funded_trial")
+    monkeypatch.setenv("OMNIGENT_FUNDED_TRIAL_SIGNING_KEY", "s" * 40)
+    monkeypatch.setenv("OMNIGENT_FUNDED_TRIAL_ANTHROPIC_API_KEY", "sk-service-synthetic")
+    monkeypatch.setenv(
+        "OMNIGENT_FUNDED_TRIAL_CONFIG",
+        _json.dumps(
+            {
+                "models": {
+                    "claude-sonnet-test": {
+                        "input": 3,
+                        "output": 15,
+                        "cache_read": 0.3,
+                        "cache_write": 3.75,
+                    }
+                },
+                "compute_usd_per_hour": {"modal": 0.5},
+                "welcome_grant": {
+                    "allowance_usd": 3,
+                    "expires_in_days": 7,
+                    "capabilities": ["inference", "compute", "coding"],
+                },
+            }
+        ),
+    )
+    yield from _build_accounts_app(tmp_path, monkeypatch, init_admin_password="admin-pw-12345")
+
+
+def test_open_signup_grants_welcome_credit(accounts_app_welcome_credit: TestClient) -> None:
+    """Self-serve accounts get the configured trial; invited accounts do not."""
+    app = accounts_app_welcome_credit
+    from fastapi.testclient import TestClient as _TC
+
+    before = int(__import__("time").time())
+    created = _TC(app.app).post(
+        "/auth/register", json={"username": "carol", "password": "aaaaaaaa"}
+    )
+    assert created.status_code == 200, created.json()
+    welcome = created.json()["welcome_grant"]
+    assert welcome["allowance_usd"] == 3.0
+    assert welcome["capabilities"] == ["coding", "compute", "inference"]
+    assert before + 6 * 86_400 < welcome["expires_at"] <= before + 7 * 86_400 + 5
+
+    carol = _login(_TC(app.app), "carol", "aaaaaaaa")
+    summary = carol.get("/v1/funded-trial").json()
+    assert summary["enabled"] is True
+    assert summary["funding"] == "trial"
+    assert summary["allowance_usd"] == 3.0
+    assert summary["remaining_usd"] == 3.0
+    assert summary["capabilities"] == ["coding", "compute", "inference"]
+
+    admin = _login(app, "admin", "admin-pw-12345")
+    token = admin.post("/auth/invite", json={}).json()["token"]
+    invited = _TC(app.app).post(
+        "/auth/register", json={"invite": token, "username": "dave", "password": "cccccccc"}
+    )
+    assert invited.status_code == 200
+    assert "welcome_grant" not in invited.json()
+    dave = _login(_TC(app.app), "dave", "cccccccc")
+    assert dave.get("/v1/funded-trial").json()["enabled"] is False
+
+    # Deleting and re-registering keeps the original ledger: no second grant.
+    assert admin.delete("/auth/users/carol").status_code == 204
+    again = _TC(app.app).post("/auth/register", json={"username": "carol", "password": "bbbbbbbb"})
+    assert again.status_code == 200, again.json()
+    assert "welcome_grant" not in again.json()
+    assert (
+        _login(_TC(app.app), "carol", "bbbbbbbb").get("/v1/funded-trial").json()["allowance_usd"]
+        == 3.0
+    )

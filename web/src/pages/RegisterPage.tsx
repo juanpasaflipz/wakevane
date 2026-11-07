@@ -40,6 +40,7 @@ export function RegisterPage() {
   const openSignup = info !== "loading" && info.open_signup === true;
 
   const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -71,8 +72,11 @@ export function RegisterPage() {
     }
 
     setSubmitting(true);
+    const trimmedEmail = email.trim();
     const result = await registerRequest(
-      invite === "" ? { username, password } : { invite, username, password },
+      invite === ""
+        ? { username, password, ...(trimmedEmail === "" ? {} : { email: trimmedEmail }) }
+        : { invite, username, password },
     );
     if (result.ok) {
       window.location.href = withBasePath("/");
@@ -122,6 +126,27 @@ export function RegisterPage() {
               Lowercase letters, digits, dots, hyphens, underscores — or a lowercase email.
             </p>
           </div>
+
+          {invite === "" && (
+            <div className="space-y-1.5">
+              <label htmlFor="register-email" className="text-ui font-medium leading-none">
+                Email <span className="font-normal text-muted-foreground">(optional)</span>
+              </label>
+              <Input
+                id="register-email"
+                type="email"
+                autoComplete="email"
+                inputMode="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                disabled={submitting}
+                maxLength={254}
+              />
+              <p className="text-sm text-muted-foreground">
+                For product updates and help getting started. Not used to sign in.
+              </p>
+            </div>
+          )}
 
           <div className="space-y-1.5">
             <label htmlFor="register-password" className="text-ui font-medium leading-none">

@@ -134,6 +134,14 @@ service key is attached server-side only.
   `input`, `output`, `cache_read`, `cache_write`), `compute_usd_per_hour`
   (by sandbox provider), optional `max_output_tokens`, `max_request_bytes`,
   `max_compute_hours`, `upstream_base_url`. Unlisted models/providers are denied.
+  Optional `welcome_grant` gives every open-signup registration a trial grant:
+  `{"allowance_usd": 3, "expires_in_days": 7, "capabilities": ["inference",
+  "compute", "coding", "pull_request"], "max_concurrent_roots": 1}`
+  (`capabilities` defaults to all four). Invited accounts never receive it,
+  and an account that already holds a trial grant keeps its ledger, so
+  deleting and re-registering mints no new allowance. The grant is written
+  by `/auth/register` after the account exists; a failure there is logged
+  and the registration still succeeds.
 - `OMNIGENT_FUNDED_TRIAL_SIGNING_KEY` (≥32 chars) and
   `OMNIGENT_FUNDED_TRIAL_ANTHROPIC_API_KEY` as server secrets.
 - A sandbox target with `funding: trial`; its `host_config` may not define

@@ -49,6 +49,8 @@ export interface CurrentAccount {
   is_admin: boolean;
   created_at: number | null;
   last_login_at: number | null;
+  /** Optional contact address given at open signup; null otherwise. */
+  email?: string | null;
 }
 
 /**
@@ -146,6 +148,8 @@ export interface RegisterRequest {
   invite?: string;
   username: string;
   password: string;
+  /** Optional contact address; only sent on open signup. */
+  email?: string;
 }
 
 /**
@@ -298,6 +302,8 @@ export interface AccountListEntry {
   is_admin: boolean;
   created_at: number | null;
   last_login_at: number | null;
+  /** Optional contact address given at open signup; null otherwise. */
+  email?: string | null;
   has_password: boolean;
 }
 

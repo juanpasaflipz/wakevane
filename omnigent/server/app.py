@@ -4829,6 +4829,7 @@ def create_app(
                     permission_store,
                     device_grant_store,
                     scheduled_task_store,
+                    funded_trial=getattr(app.state, "funded_trial", None),
                 ),
                 prefix="/auth",
                 tags=["auth"],

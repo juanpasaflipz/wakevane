@@ -26,6 +26,7 @@ from typing import Any
 
 from omnigent.llms.context_window import ModelPricing, compute_llm_cost
 from omnigent.server.funded_trial_store import (
+    CAPABILITIES,
     MICROS_PER_USD,
     FundedTrialDenied,
     FundedTrialStore,
@@ -51,6 +52,45 @@ def _usd_to_micros(value: float) -> int:
 
 
 @dataclass(frozen=True)
+class WelcomeGrant:
+    """Trial terms every open-signup account receives when it registers.
+
+    Absent from the operator config means no automatic grant; invited
+    accounts never receive one (an operator grants those by hand).
+
+    :param allowance_usd: Service-funded spend the account may use.
+    :param expires_in_days: Days after registration the grant lapses.
+    :param capabilities: Subset of the trial capabilities to allow.
+    :param max_concurrent_roots: Root workflows the grant may run at once.
+    """
+
+    allowance_usd: float
+    expires_in_days: float
+    capabilities: frozenset[str]
+    max_concurrent_roots: int = 1
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, Any]) -> WelcomeGrant:
+        allowance = float(raw.get("allowance_usd", 0))
+        days = float(raw.get("expires_in_days", 0))
+        if allowance <= 0 or days <= 0:
+            raise ValueError("welcome_grant needs a positive allowance_usd and expires_in_days")
+        requested = frozenset(str(c) for c in (raw.get("capabilities") or sorted(CAPABILITIES)))
+        unknown = requested - CAPABILITIES
+        if unknown:
+            raise ValueError(f"welcome_grant has unknown capabilities: {sorted(unknown)}")
+        roots = int(raw.get("max_concurrent_roots", 1))
+        if roots < 1:
+            raise ValueError("welcome_grant max_concurrent_roots must be at least 1")
+        return cls(
+            allowance_usd=allowance,
+            expires_in_days=days,
+            capabilities=requested,
+            max_concurrent_roots=roots,
+        )
+
+
+@dataclass(frozen=True)
 class FundedTrialConfig:
     """Operator-approved prices and limits; absent entries are unpriced.
 
@@ -62,6 +102,8 @@ class FundedTrialConfig:
     :param upstream_base_url: Anthropic-compatible upstream for the gateway.
     :param upstream_api_key_env: Server env var holding the service API key.
     :param signing_key_env: Server env var holding the token signing key.
+    :param welcome_grant: Automatic trial terms for open-signup accounts,
+        or ``None`` when registration grants nothing.
     """
 
     model_pricing: Mapping[str, ModelPricing] = field(default_factory=dict)
@@ -72,6 +114,7 @@ class FundedTrialConfig:
     upstream_base_url: str = "https://api.anthropic.com"
     upstream_api_key_env: str = "OMNIGENT_FUNDED_TRIAL_ANTHROPIC_API_KEY"
     signing_key_env: str = "OMNIGENT_FUNDED_TRIAL_SIGNING_KEY"
+    welcome_grant: WelcomeGrant | None = None
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> FundedTrialConfig:
@@ -105,6 +148,11 @@ class FundedTrialConfig:
                 raw.get("upstream_api_key_env", defaults.upstream_api_key_env)
             ),
             signing_key_env=str(raw.get("signing_key_env", defaults.signing_key_env)),
+            welcome_grant=(
+                WelcomeGrant.from_mapping(raw["welcome_grant"])
+                if raw.get("welcome_grant")
+                else None
+            ),
         )
 
     @classmethod
@@ -318,6 +366,28 @@ class FundedTrialPolicy:
                 "Included credit is used up; raise the overage cap to continue.",
             )
         raise last
+
+    def grant_welcome(self, user_id: str) -> TrialGrant | None:
+        """Give a newly registered open-signup account its welcome trial.
+
+        Returns ``None`` when the trial is disabled, nothing is configured,
+        or the account already holds a trial grant (re-registration after a
+        deletion keeps the original ledger rather than minting fresh
+        allowance).
+        """
+        terms = self.config.welcome_grant
+        if not self.enabled or self.store is None or terms is None or not user_id:
+            return None
+        if self.store.get_grant(user_id, "trial") is not None:
+            return None
+        return self.store.upsert_grant(
+            user_id,
+            allowance_micros=_usd_to_micros(terms.allowance_usd),
+            expires_at=int(self._clock() + terms.expires_in_days * 86_400),
+            capabilities=terms.capabilities,
+            max_concurrent_roots=terms.max_concurrent_roots,
+            actor_id="system:welcome",
+        )
 
     def summary(self, user_id: str | None) -> dict[str, Any]:
         """The caller's own effective capabilities and remaining allowance."""

@@ -37,6 +37,8 @@ class Account:
     :param has_password: Whether the row has a ``password_hash``
         set. Useful so the UI can render "External login" vs
         "Password login" badges without exposing the hash itself.
+    :param email: Optional contact address given at open signup.
+        ``None`` for invited, bootstrap and external accounts.
     """
 
     id: str
@@ -45,6 +47,7 @@ class Account:
     last_login_at: int | None
     has_password: bool
     account_generation: str | None = None
+    email: str | None = None
 
 
 @dataclasses.dataclass(frozen=True)

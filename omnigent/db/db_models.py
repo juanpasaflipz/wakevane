@@ -338,6 +338,8 @@ class SqlUser(OmnigentBase):
     password_hash: Mapped[str | None] = mapped_column(String(256), nullable=True)
     created_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_login_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Optional contact address collected at open signup; never used to log in.
+    email: Mapped[str | None] = mapped_column(String(254), nullable=True)
 
 
 class SqlPreference(OmnigentBase):
