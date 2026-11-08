@@ -24,12 +24,71 @@ keep their upstream names so the two stay easy to merge.
 
 </div>
 
-**Using WakeVane in a browser?** Start with the [browser user guide](docs/WEB_USER_GUIDE.md)
+**Using WakeVane in a browser?** Start with the [browser user guide](https://docs.wakevane.com/)
 for sign-in, your first session, approvals, files, sharing, and troubleshooting.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/omnigent-ai/omnigent/main/docs/images/omnigent-desktop.png" alt="The Omnigent desktop app: starting a new session, with pinned and project-grouped sessions in the sidebar" width="720" />
 </p>
+
+---
+
+## What WakeVane adds
+
+If you arrived from upstream Omnigent, this is what the fork contributes.
+WakeVane adds three primitives motivated by the observation that a harness no
+longer adds coding intelligence, so it has to earn its keep elsewhere: waking
+agents on events, deleting its own scaffolding, and measuring cost. The design
+is in [`designs/HARNESS_FLYWHEEL.md`](designs/HARNESS_FLYWHEEL.md).
+
+- **🔔 Subscriptions.** One tool, `sys_subscribe`, wakes an agent when CI goes
+  red on its PR, an issue opens, or any webhook fires. `POST /v1/events/github`
+  verifies GitHub webhooks; `POST /v1/events/webhook` takes anything else.
+  Behind the `subscriptions` feature flag. See [`docs/SUBSCRIPTIONS.md`](docs/SUBSCRIPTIONS.md).
+- **🧹 Shim registry.** A workaround for a model weakness is correct the day
+  it is written and dead weight the day the model improves. So every
+  deterministic patch over a model gap is registered with a reason and a
+  review-by release, logged on each firing, and listed at `GET /v1/shims`
+  with a `retirable` flag: yesterday's assumptions get revisited instead of
+  fossilizing. The [`shim-janitor`](examples/shim-janitor) agent opens PRs to
+  delete shims that stopped firing. Full write-up: [`docs/SHIMS.md`](docs/SHIMS.md).
+- **📉 Efficiency scorecard.** `omnigent usage --efficiency` and
+  `GET /v1/usage/efficiency` report cache hit rate, output share, cost per
+  session, and model mix per harness and per model, worst sessions first.
+- **🏭 Software factory.** [`examples/factory`](examples/factory) is a
+  foreman that subscribes to repository events, triages on a small model,
+  dispatches a sandboxed fixer that must prove its work with tests and a
+  recording, asks a human before merging, and hands the merge to a deploy
+  watcher. No polling anywhere.
+- **Design review.** [`examples/egm`](examples/egm) adds an opt-in
+  Elephant-Goldfish workflow: versioned specifications, fresh independent
+  reviews, bounded revisions and an implementation handoff for human approval.
+  Start with the [beta user guide](docs/DESIGN_REVIEW.md). It currently requires a
+  connected computer; [browser-only cloud execution](docs/BROWSER_ONLY_DESIGN_REVIEW.md)
+  is planned.
+
+
+### Install WakeVane
+
+WakeVane tracks upstream Omnigent and ships from the `dist` branch. Install it
+the same way as upstream, pointed at this repository:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/juanpasaflipz/wakevane/dist/scripts/install_oss.sh \
+  | sh -s -- --repo https://github.com/juanpasaflipz/wakevane.git@dist
+# or, with uv directly:
+uv tool install --python 3.12 "git+https://github.com/juanpasaflipz/wakevane.git@dist"
+```
+
+The flywheel features are on by default. Switch one off with a minus sign:
+
+```bash
+omnigent server                                  # everything on
+OMNIGENT_FEATURES=-subscriptions omnigent server # no event ingest routes
+```
+
+[`FORK_PLAN.md`](FORK_PLAN.md) explains how the fork is maintained and where
+it is going.
 
 ---
 
@@ -69,62 +128,6 @@ Omnigent lets you:
   [policies](#6-govern-your-agents-with-policies) to pause for your approval
   before risky actions, cap spend, or limit which tools an agent reaches.
   They apply to the whole server, one agent, or a single chat.
-
----
-
-## What WakeVane adds
-
-This fork adds three primitives motivated by the observation that a harness no
-longer adds coding intelligence, so it has to earn its keep elsewhere: waking
-agents on events, deleting its own scaffolding, and measuring cost. The design
-is in [`designs/HARNESS_FLYWHEEL.md`](designs/HARNESS_FLYWHEEL.md).
-
-- **🔔 Subscriptions.** One tool, `sys_subscribe`, wakes an agent when CI goes
-  red on its PR, an issue opens, or any webhook fires. `POST /v1/events/github`
-  verifies GitHub webhooks; `POST /v1/events/webhook` takes anything else.
-  Behind the `subscriptions` feature flag. See [`docs/SUBSCRIPTIONS.md`](docs/SUBSCRIPTIONS.md).
-- **🧹 Shim registry.** Every deterministic patch over a model gap is
-  registered with a reason and a review-by release, logged on each firing,
-  and listed at `GET /v1/shims` with a `retirable` flag. The
-  [`shim-janitor`](examples/shim-janitor) agent opens PRs to delete shims
-  that stopped firing. See [`docs/SHIMS.md`](docs/SHIMS.md).
-- **📉 Efficiency scorecard.** `omnigent usage --efficiency` and
-  `GET /v1/usage/efficiency` report cache hit rate, output share, cost per
-  session, and model mix per harness and per model, worst sessions first.
-- **🏭 Software factory.** [`examples/factory`](examples/factory) is a
-  foreman that subscribes to repository events, triages on a small model,
-  dispatches a sandboxed fixer that must prove its work with tests and a
-  recording, asks a human before merging, and hands the merge to a deploy
-  watcher. No polling anywhere.
-- **Design review.** [`examples/egm`](examples/egm) adds an opt-in
-  Elephant-Goldfish workflow: versioned specifications, fresh independent
-  reviews, bounded revisions and an implementation handoff for human approval.
-  Start with the [beta user guide](docs/DESIGN_REVIEW.md). It currently requires a
-  connected computer; [browser-only cloud execution](docs/BROWSER_ONLY_DESIGN_REVIEW.md)
-  is planned.
-
-
-### Install WakeVane
-
-WakeVane tracks upstream Omnigent and ships from the `dist` branch. Install it
-the same way as upstream, pointed at this repository:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/juanpasaflipz/wakevane/dist/scripts/install_oss.sh \
-  | sh -s -- --repo https://github.com/juanpasaflipz/wakevane.git@dist
-# or, with uv directly:
-uv tool install --python 3.12 "git+https://github.com/juanpasaflipz/wakevane.git@dist"
-```
-
-The flywheel features are on by default. Switch one off with a minus sign:
-
-```bash
-omnigent server                                  # everything on
-OMNIGENT_FEATURES=-subscriptions omnigent server # no event ingest routes
-```
-
-[`FORK_PLAN.md`](FORK_PLAN.md) explains how the fork is maintained and where
-it is going.
 
 ---
 
