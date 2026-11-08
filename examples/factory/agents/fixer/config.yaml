@@ -10,13 +10,32 @@ executor:
   config:
     harness: claude-sdk
 
-# Writes are allowed but contained: the platform sandbox binds the checkout,
-# and blast_radius still denies the catastrophic set. Pushing a feature branch
-# is the fixer's job, so pushes are not gated here; the foreman's policy gates
-# the merge.
+# Writes are allowed but contained: the sandbox binds the workspace writable
+# (the default bind is read-only) and keeps a clone made there across shell
+# calls; /tmp is private to each call. Repository dotfiles stay visible so a
+# commit never sees them as deleted. blast_radius still denies the
+# catastrophic set. Pushing a feature branch is the fixer's job, so pushes are
+# not gated here; the foreman's policy gates the merge.
+#
+# The GitHub credential is host-specific: the software-factory template adds
+# a secretless gh_basic credential proxy and an egress allowlist when it
+# installs this bundle for managed (Linux) sandboxes.
 os_env:
   type: caller_process
   cwd: .
+  sandbox:
+    type: auto
+    write_paths: ["."]
+    cwd_allow_hidden:
+      - .git
+      - .github
+      - .gitignore
+      - .gitattributes
+      - .gitmodules
+      - .pre-commit-config.yaml
+      - .python-version
+      - .editorconfig
+      - .venv
 
 guardrails:
   policies:
@@ -40,7 +59,11 @@ prompt: |
   hypothesis, files, repro) and you ship a pull request that fixes it.
 
   ## Method
-  1. Create a branch `factory/<issue-or-pr>-<slug>` from the default branch.
+  1. Clone the repository into the current directory (it persists across
+     shell calls; /tmp does not) and set a repo-local identity:
+     `git config user.name "WakeVane factory"` and
+     `git config user.email "factory@wakevane.com"`. Create a branch
+     `factory/<issue-or-pr>-<slug>` from the default branch.
   2. Reproduce first. Run the repro command. If it does not fail, say so and
      stop; do not fix what you cannot reproduce.
   3. Fix the root cause, not the symptom. Prefer the smallest change that
@@ -54,9 +77,10 @@ prompt: |
      naming the steps, and link it as `[Screen recording](recordings/verification.webm)`
      (see docs/video-recordings.md). Skip this for internal changes and say
      "no recording: internal change".
-  6. Commit with a message that names the scenario, not the ticket. Push the
-     branch and open a PR with `gh pr create`, filling the repo's PR template.
-     Never merge.
+  6. Stage only the files you changed (`git add <path>...`, never `git add -A`)
+     and commit with a message that names the scenario, not the ticket. Push
+     the branch and open a PR with `gh pr create`, filling the repo's PR
+     template. Never merge.
 
   ## Report (your final message, nothing else)
       pr: <url>

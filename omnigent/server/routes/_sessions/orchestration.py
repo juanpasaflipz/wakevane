@@ -10575,6 +10575,7 @@ def configure_subagent_block_notifier(
     conversation_store: ConversationStore,
     runner_router: RunnerRouter | None,
     agent_store: AgentStore | None = None,
+    approval_email: tuple[Any, Any, str] | None = None,
 ) -> Callable[[], None]:
     """
     Install the parent-wake notifier on the elicitation publish path.
@@ -10594,6 +10595,10 @@ def configure_subagent_block_notifier(
     :param runner_router: Router used by the wake to reach the parent's
         bound runner. ``None`` in in-process setups.
     :param agent_store: Lets each wake name the parent agent's current bundle.
+    :param approval_email: ``(account_store, mailer, base_url)`` to also
+        email the owner of an unattended (subscription-launched) session
+        about an unanswered approval; ``None`` sends no email. See
+        :mod:`omnigent.server.approval_mailer`.
     :returns: A callable that uninstalls the observer and cancels any
         in-flight wake futures. Call from the lifespan teardown.
     """
@@ -10627,12 +10632,30 @@ def configure_subagent_block_notifier(
         wake_dispatch=_wake_dispatch,
         loop=loop,
     )
-    _pending_elicitations.set_elicitation_observer(notifier.observe)
+    mail_notifier = None
+    if approval_email is not None:
+        from omnigent.server.approval_mailer import ApprovalEmailNotifier, fan_out_observers
+
+        account_store, mailer, base_url = approval_email
+        mail_notifier = ApprovalEmailNotifier(
+            conversation_store=conversation_store,
+            account_store=account_store,
+            mailer=mailer,
+            base_url=base_url,
+            loop=loop,
+        )
+        _pending_elicitations.set_elicitation_observer(
+            fan_out_observers(notifier.observe, mail_notifier.observe)
+        )
+    else:
+        _pending_elicitations.set_elicitation_observer(notifier.observe)
 
     def _uninstall() -> None:
         """Remove the observer and cancel any outstanding wake futures."""
         _pending_elicitations.set_elicitation_observer(None)
         notifier.close()
+        if mail_notifier is not None:
+            mail_notifier.close()
 
     return _uninstall
 

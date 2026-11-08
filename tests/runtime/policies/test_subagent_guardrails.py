@@ -300,3 +300,73 @@ def test_any_policies_apply_sees_child_only_guardrails(
         tool_name="calculate",
         conversation=top_level,
     )
+
+
+# ── Sub-agent identity in the policy context ───────────────────
+
+_READ_ONLY_HANDLER = "omnigent.policies.builtins.orchestration.read_only_os"
+
+
+def _report_only_supervisor(allow_sub_agents: list[str]) -> AgentSpec:
+    """A report-only supervisor whose ``read_only_os`` lets *allow_sub_agents* write."""
+    return AgentSpec(
+        spec_version=1,
+        name="supervisor",
+        guardrails=GuardrailsSpec(
+            policies=[
+                FunctionPolicySpec(
+                    name="read_only_os",
+                    on=None,
+                    function=FunctionRef(
+                        path=_READ_ONLY_HANDLER,
+                        arguments={"allow_sub_agents": allow_sub_agents},
+                    ),
+                )
+            ]
+        ),
+        sub_agents=[AgentSpec(spec_version=1, name="worker")],
+    )
+
+
+def _write_call() -> EvaluationContext:
+    """A native ``Write`` TOOL_CALL context."""
+    return EvaluationContext(
+        phase=Phase.TOOL_CALL,
+        content={"name": "Write", "arguments": {"file_path": "a.py", "content": "x"}},
+        tool_name="Write",
+    )
+
+
+@pytest.mark.asyncio
+async def test_inherited_read_only_os_lets_the_named_worker_write(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    """The engine resolves the child's spec name into ``context.sub_agent_name``.
+
+    A report-only supervisor's ``read_only_os`` runs in every worker's
+    engine; without the resolved name the fixer of a factory could not
+    write a single file.
+    """
+    child = _make_child_conversation(conversation_store)
+    engine = build_policy_engine(
+        spec=_report_only_supervisor(["worker"]),
+        conversation_id=child.id,
+        conversation_store=conversation_store,
+    )
+    assert (await engine.evaluate(_write_call())).action == PolicyAction.ALLOW
+
+
+@pytest.mark.asyncio
+async def test_inherited_read_only_os_still_fences_root_and_unnamed_children(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    """The root session and a display-label child resolve to no worker name."""
+    root = conversation_store.create_conversation()
+    labelled = _make_child_conversation(conversation_store, sub_agent_name="Explore codebase")
+    for conversation_id in (root.id, labelled.id):
+        engine = build_policy_engine(
+            spec=_report_only_supervisor(["worker"]),
+            conversation_id=conversation_id,
+            conversation_store=conversation_store,
+        )
+        assert (await engine.evaluate(_write_call())).action == PolicyAction.DENY

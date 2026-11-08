@@ -104,6 +104,8 @@ os_env:
 guardrails:
   policies:
     # Catastrophic git/shell denied; pushes and merges ASK the human.
+    # Workers inherit these policies: the fixer may push its feature branch
+    # and clean its scratch clone, but its merges still ASK.
     blast_radius:
       type: function
       on: [tool_call]
@@ -111,12 +113,16 @@ guardrails:
         path: omnigent.policies.builtins.orchestration.blast_radius
         arguments:
           gate_pushes: true
-    # The foreman coordinates; it never edits files.
+          ungated_sub_agents: [fixer]
+    # The foreman coordinates; it never edits files. The fixer is the one
+    # worker whose job is to write.
     read_only_os:
       type: function
       on: [tool_call]
       function:
         path: omnigent.policies.builtins.orchestration.read_only_os
+        arguments:
+          allow_sub_agents: [fixer]
     # Hard stop on spend for the whole tree; soft checkpoint at 10.
     session_budget:
       type: function

@@ -7,6 +7,7 @@ the in-memory GitHub webhooks API from :mod:`tests.server.github_webhook_fixture
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -76,6 +77,7 @@ def env(db_uri: str, tmp_path: Path) -> dict[str, Any]:
         ),
         prefix="/v1",
     )
+    stores["app"] = app
     stores["client"] = TestClient(app)
     return stores
 
@@ -117,7 +119,14 @@ def test_factory_installs_foreman_with_default_policies(env: dict[str, Any]) -> 
         "max_cost_usd": 25.0,
         "ask_thresholds_usd": [10.0],
     }
-    assert _policy_arguments(spec, "orchestration.blast_radius") == {"gate_pushes": True}
+    assert _policy_arguments(spec, "orchestration.blast_radius") == {
+        "gate_pushes": True,
+        "ungated_sub_agents": ["fixer"],
+    }
+    assert _policy_arguments(spec, "orchestration.read_only_os") == {"allow_sub_agents": ["fixer"]}
+    fixer = next(sub for sub in spec.sub_agents if sub.name == "fixer")
+    assert fixer.os_env is not None and fixer.os_env.sandbox is not None
+    assert fixer.os_env.sandbox.credential_proxy is None, "no proxy off managed sandboxes"
     assert body["hook"]["status"] == "created"
     assert len(env["fake_github"].hooks["acme/api"]) == 1
 
@@ -133,7 +142,46 @@ def test_factory_applies_budget_and_merge_gate(env: dict[str, Any]) -> None:
         "max_cost_usd": 5.0,
         "ask_thresholds_usd": [2.0],
     }
-    assert _policy_arguments(spec, "orchestration.blast_radius") == {"gate_pushes": False}
+    assert _policy_arguments(spec, "orchestration.blast_radius") == {
+        "gate_pushes": False,
+        "ungated_sub_agents": ["fixer"],
+    }
+
+
+def test_factory_on_managed_sandboxes_gives_the_fixer_a_github_proxy(
+    env: dict[str, Any],
+) -> None:
+    """Managed launches run the fixer under bwrap with a writable workspace.
+
+    Its GitHub access is the owner's token through the secretless proxy, so
+    the fixer can push a branch and open the PR without the token ever
+    entering the sandbox. Fails if the proxy or the writable workspace is
+    dropped, which is what left the first production run unable to clone.
+    """
+    env["app"].state.sandbox_config = SimpleNamespace(managed_launch_supported=True)
+    connect_github(env["github"], ALICE)
+
+    response = _start(env)
+
+    assert response.status_code == 200, response.text
+    spec = _installed_spec(env, response.json()["agent_id"])
+    fixer = next(sub for sub in spec.sub_agents if sub.name == "fixer")
+    assert fixer.os_env is not None
+    sandbox = fixer.os_env.sandbox
+    assert sandbox is not None
+    assert sandbox.type == "linux_bwrap"
+    assert sandbox.write_paths == ["."]
+    assert ".git" in (sandbox.cwd_allow_hidden or [])
+    assert "* api.github.com/**" in (sandbox.egress_rules or [])
+    assert sandbox.credential_proxy is not None
+    hosts = {entry.host for entry in sandbox.credential_proxy.entries}
+    assert hosts == {"github.com", "api.github.com"}
+    assert all(
+        entry.source.command == "gh auth token" for entry in sandbox.credential_proxy.entries
+    )
+    assert all(
+        sub["execution_target"] == "managed_sandbox" for sub in response.json()["subscriptions"]
+    )
 
 
 def test_factory_creates_launch_subscriptions_for_the_repository(env: dict[str, Any]) -> None:

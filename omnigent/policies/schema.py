@@ -207,6 +207,10 @@ class EventContext(TypedDict, total=False):
     :param conversation_title: The conversation's readable title
         (``Conversation.title``). ``None`` when the conversation has no
         title yet. Read via ``event["context"]["conversation_title"]``.
+    :param sub_agent_name: The bundle sub-agent this conversation runs,
+        e.g. ``"fixer"``; ``None`` for a top-level session. Resolved by
+        the engine from the conversation row. Read via
+        ``event["context"]["sub_agent_name"]``.
     :param turn_final: On ``RESPONSE``, the runner relay sets ``True`` for
         the final text segment of a successful turn and ``False`` for
         intermediate segments or failed, cancelled, and incomplete turns.
@@ -233,6 +237,8 @@ class EventContext(TypedDict, total=False):
     # ``str | None``: the value is ``ctx.conversation_title``, ``None`` when
     # the conversation has no title yet.
     conversation_title: str | None
+    # ``str | None``: ``None`` for a top-level session.
+    sub_agent_name: str | None
     # RESPONSE policies skip only explicit False for completion actions;
     # None preserves callers that do not distinguish segments.
     turn_final: bool | None

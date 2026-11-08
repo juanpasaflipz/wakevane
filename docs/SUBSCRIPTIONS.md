@@ -101,6 +101,10 @@ The response carries `agent_id`, `agent_name`, `subscription_ids`, the `subscrip
 
 The budget is a per-session cap on the foreman: each launched session (and the workers it dispatches) stops at that amount; it is not pooled across a calendar day.
 
+Workers run under the foreman's policies as well as their own. The foreman's `read_only_os` lists the fixer in `allow_sub_agents`, and its `blast_radius` lists it in `ungated_sub_agents`, so the fixer can edit files, push its feature branch and delete its scratch clone; a merge, release or deploy from any worker still asks you. On managed sandboxes the fixer reaches GitHub with your connected GitHub token through the secretless credential proxy (`gh_basic`, with an egress allowlist for GitHub and the Python and npm package indexes), and its workspace is writable and persists across shell calls.
+
+When a session a subscription started waits on an approval for two minutes, the server emails the session owner the approval link, once per request. This needs a verified email on the owner's account and the `OMNIGENT_SMTP_*` mailer settings.
+
 ## The generic webhook
 
 Anything that is not GitHub posts to `POST /v1/events/webhook` under normal bearer authentication:

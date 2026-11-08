@@ -247,6 +247,8 @@ def _build_event(ctx: EvaluationContext) -> PolicyEvent:
             "conversation_id": ctx.conversation_id,
             # The conversation's readable title. None when untitled.
             "conversation_title": ctx.conversation_title,
+            # The bundle sub-agent this conversation runs. None at top level.
+            "sub_agent_name": ctx.sub_agent_name,
             # RESPONSE phase only: whether this text ends a successful
             # turn. None on other phases and on callers
             # that don't distinguish segments.

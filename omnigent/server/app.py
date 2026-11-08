@@ -1344,6 +1344,30 @@ def _ensure_default_polly_agent(
     )
 
 
+def _approval_email_settings(
+    auth_provider: AuthProvider | None, account_store: Any | None
+) -> tuple[Any, Any, str] | None:
+    """``(account_store, mailer, base_url)`` for approval emails, or ``None``.
+
+    Needs accounts auth (owners have verified emails and a public base URL)
+    and a configured SMTP mailer.
+    """
+    from omnigent.server.auth import UnifiedAuthProvider
+    from omnigent.server.mailer import SmtpMailer
+
+    if account_store is None or not isinstance(auth_provider, UnifiedAuthProvider):
+        return None
+    accounts_config = (
+        auth_provider._accounts_config if auth_provider._source == "accounts" else None
+    )
+    if accounts_config is None:
+        return None
+    mailer = SmtpMailer.from_environment()
+    if mailer is None:
+        return None
+    return account_store, mailer, accounts_config.base_url
+
+
 def create_app(
     agent_store: AgentStore,
     file_store: FileStore,
@@ -1719,6 +1743,7 @@ def create_app(
             conversation_store,
             runner_router,
             agent_store=agent_store,
+            approval_email=_approval_email_settings(auth_provider, account_store),
         )
 
         from omnigent.runner.resource_registry import (

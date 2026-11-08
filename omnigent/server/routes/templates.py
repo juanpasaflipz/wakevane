@@ -94,11 +94,18 @@ def create_templates_router(
         hook = await connect_repository(
             request, user_id, body.owner, body.repo, store=github_store, client=github_client
         )
+        sandbox_config = getattr(request.app.state, "sandbox_config", None)
+        execution_target = (
+            "managed_sandbox"
+            if sandbox_config is not None and sandbox_config.managed_launch_supported
+            else "connected_host"
+        )
         plan = factory_plan(
             body.owner,
             body.repo,
             budget_usd=body.daily_budget_usd,
             ask_before_merge=body.ask_before_merge,
+            managed_sandbox=execution_target == "managed_sandbox",
         )
         bundle = await asyncio.to_thread(build_factory_bundle, plan)
         await asyncio.to_thread(validate_agent_bundle, bundle, enforce_handler_allowlist=True)
@@ -114,12 +121,6 @@ def create_templates_router(
             owner=user_id,
             name=plan.agent_name,
             bundle_bytes=bundle,
-        )
-        sandbox_config = getattr(request.app.state, "sandbox_config", None)
-        execution_target = (
-            "managed_sandbox"
-            if sandbox_config is not None and sandbox_config.managed_launch_supported
-            else "connected_host"
         )
         subscriptions = await asyncio.to_thread(
             ensure_factory_subscriptions,

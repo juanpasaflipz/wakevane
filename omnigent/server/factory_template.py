@@ -33,6 +33,27 @@ MAX_DAILY_BUDGET_USD = 1000.0
 # The foreman asks to continue once spend crosses this share of the budget.
 _ASK_THRESHOLD_SHARE = 0.4
 
+# On managed (Linux) sandboxes the fixer reaches GitHub through the secretless
+# credential proxy: the parent resolves the session owner's GitHub token (the
+# host writes it for ``gh`` at startup) and the sandbox only sees placeholders.
+# The proxy needs an egress allowlist; it covers GitHub and the package indexes
+# a test run usually installs from.
+_FIXER_CONFIG = Path("agents") / "fixer" / "config.yaml"
+_MANAGED_FIXER_SANDBOX: dict[str, Any] = {
+    "type": "linux_bwrap",
+    "egress_rules": [
+        "* github.com/**",
+        "* api.github.com/**",
+        "* codeload.github.com/**",
+        "* uploads.github.com/**",
+        "* *.githubusercontent.com/**",
+        "* pypi.org/**",
+        "* files.pythonhosted.org/**",
+        "* registry.npmjs.org/**",
+    ],
+    "credential_proxy": [{"type": "gh_basic", "source": {"command": "gh auth token"}}],
+}
+
 _COST_BUDGET_PATH = "omnigent.policies.builtins.cost.cost_budget"
 _BLAST_RADIUS_PATH = "omnigent.policies.builtins.orchestration.blast_radius"
 
@@ -72,6 +93,9 @@ class FactoryPlan:
     budget_usd: float
     ask_before_merge: bool
     subscriptions: list[FactorySubscriptionSpec] = field(default_factory=list)
+    # Launches run on managed (Linux) sandboxes, so the fixer gets the
+    # GitHub credential proxy (see ``_MANAGED_FIXER_SANDBOX``).
+    managed_sandbox: bool = False
 
     @property
     def full_name(self) -> str:
@@ -92,7 +116,12 @@ def factory_agent_name(owner: str, repo: str) -> str:
 
 
 def factory_plan(
-    owner: str, repo: str, *, budget_usd: float, ask_before_merge: bool
+    owner: str,
+    repo: str,
+    *,
+    budget_usd: float,
+    ask_before_merge: bool,
+    managed_sandbox: bool = False,
 ) -> FactoryPlan:
     """Build the plan (agent settings plus subscriptions) for ``owner/repo``."""
     full_name = f"{owner}/{repo}"
@@ -101,6 +130,7 @@ def factory_plan(
         repo=repo,
         budget_usd=budget_usd,
         ask_before_merge=ask_before_merge,
+        managed_sandbox=managed_sandbox,
         subscriptions=[
             FactorySubscriptionSpec(
                 kind="issues.opened",
@@ -150,6 +180,32 @@ def apply_factory_settings(config: dict[str, Any], plan: FactoryPlan) -> dict[st
     return config
 
 
+def apply_managed_fixer_sandbox(config: dict[str, Any]) -> dict[str, Any]:
+    """Give a fixer ``config.yaml`` the managed-sandbox GitHub credential proxy.
+
+    Keeps the bundle's own sandbox grants (writable workspace, visible
+    repository dotfiles) and adds the Linux backend, egress allowlist and
+    ``gh_basic`` proxy on top.
+
+    :param config: The parsed fixer ``config.yaml``; modified in place.
+    :returns: *config*.
+    """
+    os_env = config.setdefault("os_env", {"type": "caller_process", "cwd": "."})
+    sandbox = os_env.get("sandbox")
+    os_env["sandbox"] = {
+        **(sandbox if isinstance(sandbox, dict) else {}),
+        **_MANAGED_FIXER_SANDBOX,
+    }
+    return config
+
+
+def _rewrite_yaml(path: Path, apply: Any) -> None:
+    """Load the YAML at *path*, pass it through *apply*, and write it back."""
+    config = yaml.safe_load(path.read_text(encoding="utf-8"))
+    apply(config)
+    path.write_text(yaml.safe_dump(config, sort_keys=False, allow_unicode=True), encoding="utf-8")
+
+
 def build_factory_bundle(plan: FactoryPlan) -> bytes:
     """Tar the packaged factory bundle with the plan applied to its foreman.
 
@@ -160,12 +216,11 @@ def build_factory_bundle(plan: FactoryPlan) -> bytes:
 
     with tempfile.TemporaryDirectory() as tmpdir:
         bundle_dir = materialize_bundle(FACTORY_BUNDLE_SOURCE, Path(tmpdir) / "bundle")
-        config_path = bundle_dir / "config.yaml"
-        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        apply_factory_settings(config, plan)
-        config_path.write_text(
-            yaml.safe_dump(config, sort_keys=False, allow_unicode=True), encoding="utf-8"
+        _rewrite_yaml(
+            bundle_dir / "config.yaml", lambda config: apply_factory_settings(config, plan)
         )
+        if plan.managed_sandbox:
+            _rewrite_yaml(bundle_dir / _FIXER_CONFIG, apply_managed_fixer_sandbox)
         return _tar_gz_dir(bundle_dir)
 
 

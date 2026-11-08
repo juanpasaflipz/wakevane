@@ -887,6 +887,7 @@ def build_policy_engine(
         ),
         conversation_id=conversation_id,
         conversation_title=conv.title if conv is not None else None,
+        sub_agent_name=child_spec.name if child_spec is not None else None,
         initial_labels=initial_labels,
         initial_session_state=initial_session_state,
         initial_usage=initial_usage,

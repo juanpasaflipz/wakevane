@@ -12,7 +12,7 @@ from __future__ import annotations
 import posixpath
 import re
 import shlex
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Sequence
 from typing import Any, TypeAlias
 
 from omnigent.policies.builtins._shell import SHELL_TOOLS
@@ -349,11 +349,19 @@ def _push_severity(argv: list[str]) -> str | None:
     return "ASK"
 
 
+def _sub_agent_name(event: _Json) -> str | None:
+    """The bundle sub-agent the event's conversation runs, or ``None`` at top level."""
+    context = event.get("context")
+    name = context.get("sub_agent_name") if isinstance(context, dict) else None
+    return name if isinstance(name, str) and name else None
+
+
 def blast_radius(
     *,
     gate_pushes: bool = True,
     risky_action: str = "ASK",
     deny_reason: str = "Blocked by the blast-radius policy.",
+    ungated_sub_agents: Sequence[str] = (),
 ) -> Callable[[_Json, _Json], _Json]:
     """
     Factory: gate high-blast-radius shell commands by reversibility.
@@ -372,6 +380,12 @@ def blast_radius(
     :param risky_action: Verdict for recoverable-but-outward commands:
         ``"ASK"`` (default) or ``"DENY"``.
     :param deny_reason: Reason text surfaced on a DENY decision.
+    :param ungated_sub_agents: Bundle sub-agents (by spec name, e.g.
+        ``("fixer",)``) whose ``git push`` and ``rm -rf`` of a path are not
+        gated even when *gate_pushes* is on. A worker inherits its root's
+        policies, so this is how a foreman gates its own pushes while its
+        fixer pushes a feature branch and cleans its scratch clone. Merges,
+        releases, infra commands and the catastrophic DENY set still apply.
     :returns: An evaluator ``fn(event, config)`` returning a V0 decision.
     :raises ValueError: If ``risky_action`` is not ``"ASK"`` or ``"DENY"``.
     """
@@ -380,6 +394,7 @@ def blast_radius(
         raise ValueError(
             f"blast_radius: risky_action must be 'ASK' or 'DENY', got {risky_action!r}"
         )
+    ungated = frozenset(ungated_sub_agents)
 
     def _evaluate(event: _Json, config: _Json) -> _Json:  # noqa: ARG001
         """
@@ -410,7 +425,10 @@ def blast_radius(
         }
         if "DENY" in severities or any(p.search(command) for p in _DENY_PATTERNS):
             return _decision("DENY", f"{deny_reason} (irreversible: {command!r})")
-        if gate_pushes and ("ASK" in severities or any(p.search(command) for p in _ASK_PATTERNS)):
+        gate_rm_and_push = gate_pushes and _sub_agent_name(event) not in ungated
+        if (gate_rm_and_push and "ASK" in severities) or (
+            gate_pushes and any(p.search(command) for p in _ASK_PATTERNS)
+        ):
             reason = (
                 "High-blast-radius command needs approval"
                 if normalized_risky_action == "ASK"
@@ -648,6 +666,7 @@ def read_only_os(
         "This agent is report-only: it may read files and run shell, but never "
         "write or edit them. Describe the change in your report instead of applying it."
     ),
+    allow_sub_agents: Sequence[str] = (),
 ) -> Callable[[_Json, _Json], _Json]:
     """
     Factory: deny every file-mutating tool call (report-only agents).
@@ -661,6 +680,10 @@ def read_only_os(
     is refused at the policy layer.
 
     :param deny_reason: Reason text surfaced on a DENY decision.
+    :param allow_sub_agents: Bundle sub-agents (by spec name, e.g.
+        ``("fixer",)``) that may write. Workers inherit their root's
+        policies, so a report-only foreman lists the workers whose job is
+        to change code.
     :returns: An evaluator ``fn(event, config)`` returning DENY for any
         write/edit tool call, ALLOW otherwise.
     """
@@ -669,6 +692,7 @@ def read_only_os(
     # tool, and Pi's native lowercase write/edit — the same tool set
     # worktree_guard gates, so the two write policies stay in lockstep.
     write_tools = NATIVE_WRITE_TOOLS | {"sys_os_write", "sys_os_edit", "write", "edit"}
+    writers = frozenset(allow_sub_agents)
 
     def _evaluate(event: _Json, config: _Json) -> _Json:  # noqa: ARG001
         """
@@ -678,7 +702,7 @@ def read_only_os(
         :param config: Runtime config dict (unused).
         :returns: DENY for a write/edit tool, ALLOW otherwise.
         """
-        if _tool_call(event, write_tools) is None:
+        if _tool_call(event, write_tools) is None or _sub_agent_name(event) in writers:
             return _ALLOW
         return _decision("DENY", deny_reason)
 

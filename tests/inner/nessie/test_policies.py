@@ -147,6 +147,47 @@ def test_blast_radius_gate_pushes_false_allows_recoverable_not_catastrophic() ->
     assert _result(evaluate(_tool_call("sys_os_shell", command="rm -rf /"), {})) == "DENY"
 
 
+def _in_sub_agent(event: dict[str, Any], name: str | None) -> dict[str, Any]:
+    """:returns: *event* with the engine-resolved ``context.sub_agent_name`` set."""
+    return {**event, "context": {"sub_agent_name": name}}
+
+
+def test_blast_radius_ungated_sub_agent_pushes_but_merge_still_asks() -> None:
+    """
+    A foreman's ``gate_pushes`` is inherited by its workers; listing the fixer
+    in ``ungated_sub_agents`` lets it push a branch and clean its scratch clone
+    while merges still ASK and force-push still DENIES. Fails if the exemption
+    leaked to the foreman itself, to other workers, or past the merge gate.
+    """
+    evaluate = blast_radius(gate_pushes=True, ungated_sub_agents=["fixer"])
+    push = _tool_call("sys_os_shell", command="git push -u origin factory/5-ruff")
+    scratch = _tool_call("Bash", command="cd /tmp && rm -rf repo")
+
+    assert _result(evaluate(_in_sub_agent(push, "fixer"), {})) == "ALLOW"
+    assert _result(evaluate(_in_sub_agent(scratch, "fixer"), {})) == "ALLOW"
+    assert _result(evaluate(_in_sub_agent(push, None), {})) == "ASK"
+    assert _result(evaluate(_in_sub_agent(push, "watcher"), {})) == "ASK"
+    assert _result(evaluate(push, {})) == "ASK"
+    merge = _tool_call("sys_os_shell", command="gh pr merge 6")
+    assert _result(evaluate(_in_sub_agent(merge, "fixer"), {})) == "ASK"
+    force = _tool_call("sys_os_shell", command="git push --force origin dist")
+    assert _result(evaluate(_in_sub_agent(force, "fixer"), {})) == "DENY"
+
+
+def test_read_only_os_allow_sub_agents_lets_named_worker_write() -> None:
+    """
+    A report-only foreman's read_only_os is inherited by its workers; the
+    fixer listed in ``allow_sub_agents`` may write, everyone else may not.
+    """
+    evaluate = read_only_os(allow_sub_agents=["fixer"])
+    write = _tool_call("Write", file_path="pyproject.toml", content="x")
+
+    assert _result(evaluate(_in_sub_agent(write, "fixer"), {})) == "ALLOW"
+    assert _result(evaluate(_in_sub_agent(write, "triager"), {})) == "DENY"
+    assert _result(evaluate(_in_sub_agent(write, None), {})) == "DENY"
+    assert _result(evaluate(write, {})) == "DENY"
+
+
 def test_blast_radius_risky_action_can_deny() -> None:
     """``risky_action=DENY`` blocks ordinary pushes and other risky commands."""
     evaluate = blast_radius(risky_action="DENY")

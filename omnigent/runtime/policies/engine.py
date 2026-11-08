@@ -68,6 +68,8 @@ class PolicyEngine:
         label state for.
     :param conversation_title: The conversation's human-readable
         title. ``None`` when untitled.
+    :param sub_agent_name: The bundle sub-agent this conversation
+        runs, e.g. ``"fixer"``. ``None`` for a top-level session.
     :param initial_labels: Labels already persisted for the
         conversation at workflow-start (the hot cache seed).
     :param initial_session_state: Seed state for the hot cache.
@@ -113,6 +115,7 @@ class PolicyEngine:
         ask_timeout: int,
         conversation_id: str,
         conversation_title: str | None = None,
+        sub_agent_name: str | None = None,
         initial_labels: dict[str, str],
         initial_session_state: dict[str, Any] | None = None,
         initial_usage: dict[str, float] | None = None,
@@ -131,6 +134,7 @@ class PolicyEngine:
         self.ask_timeout = ask_timeout
         self._conversation_id = conversation_id
         self._conversation_title = conversation_title
+        self._sub_agent_name = sub_agent_name
         # Root of this conversation's spawn tree. The per-session cost-budget
         # approval is routed here (not the per-conversation session_state) so
         # approving once covers the whole tree — a sub-agent runs as its own
@@ -937,7 +941,7 @@ class PolicyEngine:
 
     def _inject_conversation_title(self, ctx: EvaluationContext) -> EvaluationContext:
         """
-        Return a copy of *ctx* with ``conversation_title`` populated.
+        Return a copy of *ctx* with ``conversation_title`` and ``sub_agent_name`` populated.
 
         Injects the engine's own conversation title so function policy
         callables can build human-readable, session-scoped identifiers
@@ -951,7 +955,11 @@ class PolicyEngine:
             ``conversation_title`` set to this engine's conversation
             title.
         """
-        return replace(ctx, conversation_title=self._conversation_title)
+        return replace(
+            ctx,
+            conversation_title=self._conversation_title,
+            sub_agent_name=self._sub_agent_name,
+        )
 
     def _filter_schema_valid(
         self,
