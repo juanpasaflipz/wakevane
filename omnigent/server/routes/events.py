@@ -172,8 +172,9 @@ def normalize_github_event(
     name for ``push``. ``fields`` is a flat dict of the scalars subscriptions
     match against: ``repo`` (``owner/name``), ``action``, ``conclusion``,
     ``status``, ``name``, ``pull_request`` (number — the first when several),
-    ``issue`` (number), ``sender``, ``ref`` and ``url`` (the subject's
-    ``html_url``). Absent values are omitted.
+    ``issue`` (number), ``merged`` (bool, ``pull_request`` events only),
+    ``sender``, ``ref`` and ``url`` (the subject's ``html_url``). Absent or
+    malformed values are omitted.
 
     :param event_name: The ``X-GitHub-Event`` header value.
     :param payload: The decoded JSON body.
@@ -213,6 +214,8 @@ def normalize_github_event(
     issue = payload.get("issue")
     if isinstance(issue, dict) and isinstance(issue.get("number"), int):
         fields["issue"] = issue["number"]
+    if event_name == "pull_request" and isinstance(subject.get("merged"), bool):
+        fields["merged"] = subject["merged"]
     sender = _sender_login(payload)
     if sender is not None:
         fields["sender"] = sender
