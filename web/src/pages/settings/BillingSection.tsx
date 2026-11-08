@@ -19,32 +19,48 @@ import {
   startCheckout,
   type BillingSummary,
 } from "@/lib/billingApi";
+import {
+  getFundedTrialSummary,
+  hasTrialCredit,
+  type FundedTrialSummary,
+} from "@/lib/fundedTrialApi";
 
 function usd(value: number | undefined | null): string {
   return `$${(value ?? 0).toFixed(2)}`;
 }
 
-function periodEnd(summary: BillingSummary): string | null {
-  if (!summary.period_end) return null;
-  return new Date(summary.period_end * 1000).toLocaleDateString(undefined, {
+function formatDay(epochSeconds: number | null | undefined): string | null {
+  if (!epochSeconds) return null;
+  return new Date(epochSeconds * 1000).toLocaleDateString(undefined, {
     year: "numeric",
     month: "short",
     day: "numeric",
   });
 }
 
+function periodEnd(summary: BillingSummary): string | null {
+  return formatDay(summary.period_end);
+}
+
 export function BillingSection() {
   const [params] = useSearchParams();
   const [summary, setSummary] = useState<BillingSummary | "loading" | "error">("loading");
+  // Welcome / operator trial credit lives in the funded-trial ledger, not the
+  // seat; a failed lookup only hides the panel and never blocks billing.
+  const [trial, setTrial] = useState<FundedTrialSummary | null>(null);
   const [busy, setBusy] = useState(false);
   const [capDraft, setCapDraft] = useState<string>("");
 
   const reload = useCallback(async () => {
-    try {
-      const next = await getBillingSummary();
-      setSummary(next);
-      setCapDraft(String(next.overage?.cap_usd ?? next.default_overage_cap_usd));
-    } catch {
+    const [billing, funded] = await Promise.allSettled([
+      getBillingSummary(),
+      getFundedTrialSummary(),
+    ]);
+    setTrial(funded.status === "fulfilled" ? funded.value : null);
+    if (billing.status === "fulfilled") {
+      setSummary(billing.value);
+      setCapDraft(String(billing.value.overage?.cap_usd ?? billing.value.default_overage_cap_usd));
+    } else {
       setSummary("error");
     }
   }, []);
@@ -119,9 +135,37 @@ export function BillingSection() {
   const credit = summary.credit ?? null;
   const overage = summary.overage;
   const ends = periodEnd(summary);
+  const trialCredit = hasTrialCredit(trial) ? trial : null;
+  const trialEnds = formatDay(trialCredit?.expires_at);
 
   return (
     <div className="space-y-8" data-testid="billing-section">
+      {trialCredit && (
+        <section className="space-y-3" data-testid="billing-trial-credit">
+          <SettingsLabel
+            label="Trial credit"
+            description="Usage on us. Start a session from the home page; no card needed until it runs out."
+          />
+          <div className="rounded-lg border p-4 space-y-2">
+            <div className="h-2 w-full overflow-hidden rounded bg-muted">
+              <div
+                className="h-2 bg-primary"
+                style={{
+                  width: `${Math.min(
+                    100,
+                    (100 * ((trialCredit.spent_usd ?? 0) + (trialCredit.reserved_usd ?? 0))) /
+                      Math.max(trialCredit.allowance_usd ?? 0, 0.01),
+                  )}%`,
+                }}
+              />
+            </div>
+            <p className="text-sm text-muted-foreground">
+              {usd(trialCredit.remaining_usd)} of {usd(trialCredit.allowance_usd)} remaining
+              {trialEnds ? ` · expires ${trialEnds}` : ""}
+            </p>
+          </div>
+        </section>
+      )}
       <section className="space-y-3">
         <SettingsLabel label="Seat" description="Your subscription and its billing period." />
         <div className="rounded-lg border p-4 space-y-2">
