@@ -132,10 +132,15 @@ it is going.
 
 ### 1. Install
 
-One command installs Omnigent and everything it needs:
+One command installs WakeVane and everything it needs. It is the upstream
+Omnigent installer pointed at this repository's `dist` branch, so it builds from
+source and also needs `git`, Node.js and `npm` (see the toolchain list below).
+The plain upstream one-liner installs Omnigent from PyPI **without** the
+WakeVane features.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/omnigent-ai/omnigent/main/scripts/install_oss.sh | sh
+curl -fsSL https://raw.githubusercontent.com/juanpasaflipz/wakevane/dist/scripts/install_oss.sh \
+  | sh -s -- --repo https://github.com/juanpasaflipz/wakevane.git@dist
 ```
 
 The installer includes Databricks support and installs the Databricks CLI
@@ -148,7 +153,8 @@ Pass `--no-databricks` to omit them.
 Need an optional integration? Pass one or more extras to the installer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/omnigent-ai/omnigent/main/scripts/install_oss.sh | sh -s -- --extra modal,e2b
+curl -fsSL https://raw.githubusercontent.com/juanpasaflipz/wakevane/dist/scripts/install_oss.sh \
+  | sh -s -- --repo https://github.com/juanpasaflipz/wakevane.git@dist --extra modal,e2b
 ```
 
 The Antigravity SDK extra conflicts with Databricks dependencies. Install it
@@ -167,43 +173,22 @@ Available user-facing extras include:
 <details>
 <summary>Prefer to install manually?</summary>
 
-Omnigent needs **Python 3.12+**. Install the `omnigent` package:
+WakeVane needs **Python 3.12+** and is not published to PyPI: `uv tool install
+omnigent`, `pip install omnigent` and the Homebrew tap all install upstream
+Omnigent. Install the `omnigent` package from this repository instead:
 
 ```bash
-uv tool install omnigent        # or: pip install "omnigent"
+uv tool install --python 3.12 "git+https://github.com/juanpasaflipz/wakevane.git@dist"
 ```
 
-Manual installs use the same extras syntax, for example:
+Extras go in the package specifier, for example:
 
 ```bash
-uv tool install "omnigent[databricks,modal]"
+uv tool install --python 3.12 "omnigent[databricks,modal] @ git+https://github.com/juanpasaflipz/wakevane.git@dist"
 ```
 
-Or with [Homebrew](https://github.com/omnigent-ai/homebrew-tap):
-
-```bash
-brew install omnigent-ai/tap/omnigent
-```
-
-For source builds on networks that require package mirrors, replace these example
-URLs with your mirrors:
-
-```bash
-HOMEBREW_PIP_INDEX_URL='https://pypi.example.com/simple' \
-HOMEBREW_CARGO_INDEX_URL='https://cargo.example.com/index/' \
-  brew install --build-from-source omnigent-ai/tap/omnigent
-```
-
-The PyPI setting also routes pip's isolated build dependencies through the mirror.
-The Cargo setting takes a sparse registry index URL ending in `/`, without the
-`sparse+` prefix. Both overrides are optional and do not affect prebuilt-bottle
-installs.
-
-Or install straight from the repo:
-
-```bash
-uv tool install -q --python 3.12 git+https://github.com/omnigent-ai/omnigent.git
-```
+Building from source also needs `git`, Node.js and `npm` for the web UI (see the
+toolchain list below).
 
 </details>
 
@@ -239,7 +224,7 @@ uv tool install -q --python 3.12 git+https://github.com/omnigent-ai/omnigent.git
   uses the built-in `seatbelt` sandbox and needs nothing extra.
 - **Databricks.** The bootstrap installer includes the `databricks` extra
   and the Databricks CLI. If installing with uv directly, use
-  `uv tool install "omnigent[databricks]"` and install the
+  `uv tool install "omnigent[databricks] @ git+https://github.com/juanpasaflipz/wakevane.git@dist"` and install the
   [Databricks CLI](https://docs.databricks.com/aws/en/dev-tools/cli/install)
   separately. Sign in to a workspace-hosted server with
   `omnigent login <workspace-url>/omnigent`.
@@ -253,9 +238,7 @@ Omnigent runs natively on Windows in a degraded mode. The `install_oss.sh`
 bootstrap is POSIX-only, so install with `uv` directly:
 
 ```powershell
-uv tool install --python 3.12 omnigent
-# or from the repo:
-uv tool install --python 3.12 git+https://github.com/omnigent-ai/omnigent.git
+uv tool install --python 3.12 "git+https://github.com/juanpasaflipz/wakevane.git@dist"
 ```
 
 What works on Windows: `omnigent server`, the web UI, and the SDK-based
@@ -276,23 +259,22 @@ What is **not** available on Windows (use Linux/macOS, or WSL, for these):
 <details>
 <summary>Updating to a new release</summary>
 
-When a newer release is on PyPI, Omnigent shows a one-line notice (once per
-release) pointing here. To update:
+WakeVane is installed from the `dist` branch of this repository, not from a
+PyPI release, so the upstream "newer release on PyPI" notice does not apply.
+`omni upgrade` detects the git install, re-pulls the tracked `dist` ref and
+reports how many commits the install moved:
 
 ```bash
-omni upgrade            # detects how you installed, drains & stops the local
-                        # server, then runs the matching upgrade command
-omni upgrade --check    # just report whether a newer release is available
+omni upgrade            # detects the git install, drains & stops the local
+                        # server, then re-pulls dist and verifies the commit
+omni upgrade --check    # just report whether dist has new commits
 ```
 
 `omni upgrade` waits for in-flight agent sessions to finish before stopping the
 local server (pass `--force` to stop them immediately); the next `omni` command
-brings the server back up on the new version. Source checkouts update with
-`git pull` instead. Silence the notice with `OMNIGENT_NO_UPDATE_CHECK=1`.
-
-The check queries your configured package index — honoring `UV_INDEX_URL` /
-`PIP_INDEX_URL` and your `uv.toml` / `pip.conf` (default PyPI), so private
-mirrors work out of the box; override with `OMNIGENT_INDEX_URL` if needed.
+brings the server back up on the new build. Source checkouts update with
+`git pull` instead. If a re-pull does not move the install, force it with
+`uv tool install --reinstall "git+https://github.com/juanpasaflipz/wakevane.git@dist"`.
 
 </details>
 
@@ -324,7 +306,7 @@ If the installed wheel is broken or `omnigent` is not on `PATH`, run the
 standalone script instead:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/omnigent-ai/omnigent/main/scripts/uninstall_oss.sh | sh
+curl -fsSL https://raw.githubusercontent.com/juanpasaflipz/wakevane/dist/scripts/uninstall_oss.sh | sh
 ```
 
 Add `--yes` to the standalone script to perform the previewed CLI cleanup.
