@@ -79,7 +79,11 @@ export function RegisterPage() {
         : { invite, username, password },
     );
     if (result.ok) {
-      window.location.href = withBasePath("/");
+      // A pending verification lands on Billing, where the credit and the
+      // resend button live; everyone else goes to the home page.
+      window.location.href = withBasePath(
+        result.email_verification ? "/settings/billing?verify=sent" : "/",
+      );
       return;
     }
     setSubmitting(false);
@@ -130,7 +134,7 @@ export function RegisterPage() {
           {invite === "" && (
             <div className="space-y-1.5">
               <label htmlFor="register-email" className="text-ui font-medium leading-none">
-                Email <span className="font-normal text-muted-foreground">(optional)</span>
+                Email
               </label>
               <Input
                 id="register-email"
@@ -140,10 +144,11 @@ export function RegisterPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 disabled={submitting}
+                required
                 maxLength={254}
               />
               <p className="text-sm text-muted-foreground">
-                For product updates and help getting started. Not used to sign in.
+                We send one link to confirm it and unlock your trial credit. Not used to sign in.
               </p>
             </div>
           )}
@@ -192,7 +197,12 @@ export function RegisterPage() {
           <Button
             type="submit"
             className="w-full"
-            disabled={submitting || password.length < MIN_PASSWORD_LENGTH || username.length === 0}
+            disabled={
+              submitting ||
+              password.length < MIN_PASSWORD_LENGTH ||
+              username.length === 0 ||
+              (invite === "" && email.trim().length === 0)
+            }
             componentId="register.create_account"
           >
             {submitting ? "Creating…" : "Create account"}

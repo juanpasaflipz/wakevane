@@ -12,7 +12,7 @@ import uuid
 from collections.abc import Callable
 from typing import cast
 
-from sqlalchemy import and_, delete, exists, or_, select, update
+from sqlalchemy import and_, delete, exists, func, or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -70,6 +70,8 @@ def _to_account(row: SqlUser) -> Account:
         has_password=row.password_hash is not None,
         account_generation=row.account_generation,
         email=row.email,
+        email_verified_at=row.email_verified_at,
+        email_key=row.email_key,
     )
 
 
@@ -239,6 +241,7 @@ class SqlAlchemyAccountStore:
         *,
         is_admin: bool = False,
         email: str | None = None,
+        email_key: str | None = None,
     ) -> Account:
         """Insert a user row with a password hash.
 
@@ -256,6 +259,8 @@ class SqlAlchemyAccountStore:
             the first-boot admin bootstrap passes True.
         :param email: Optional contact address (already validated and
             lowercased by the caller). Stored for follow-up only.
+        :param email_key: Canonical form of ``email`` for duplicate
+            detection (see :mod:`omnigent.server.signup_email`).
         :returns: The created :class:`Account`.
         :raises ValueError: If a user with this id already exists.
         """
@@ -269,6 +274,8 @@ class SqlAlchemyAccountStore:
             row.is_admin = is_admin
             row.password_hash = password_hash
             row.email = email
+            row.email_key = email_key
+            row.email_verified_at = None
             row.created_at = now
             row.last_login_at = None
             row.deleted_at = None
@@ -598,6 +605,47 @@ class SqlAlchemyAccountStore:
 
         return run_write_transaction(self._session_immediate, "update_password", write)
 
+    def mark_email_verified(self, user_id: str, when_epoch_seconds: int) -> bool:
+        """Record that the account's contact address was confirmed.
+
+        Returns ``False`` when it was already verified, so callers can make
+        one-time effects (such as a welcome grant) idempotent.
+        """
+
+        def write(session: Session) -> bool:
+            require_active_account(session, user_id)
+            result = cast(
+                CursorResult,
+                session.execute(
+                    update(SqlUser)
+                    .where(
+                        SqlUser.workspace_id == current_workspace_id(),
+                        SqlUser.id == user_id,
+                        SqlUser.email_verified_at.is_(None),
+                    )
+                    .values(email_verified_at=when_epoch_seconds)
+                ),
+            )
+            return bool(result.rowcount)
+
+        return run_write_transaction(self._session_immediate, "mark_email_verified", write)
+
+    def count_verified_with_email_key(self, email_key: str, *, exclude_user_id: str) -> int:
+        """Other active accounts that already verified the same mailbox."""
+        with self._session("count_verified_email_key") as session:
+            return int(
+                session.scalar(
+                    select(func.count()).where(
+                        SqlUser.workspace_id == current_workspace_id(),
+                        SqlUser.email_key == email_key,
+                        SqlUser.email_verified_at.is_not(None),
+                        SqlUser.deleted_at.is_(None),
+                        SqlUser.id != exclude_user_id,
+                    )
+                )
+                or 0
+            )
+
     def mark_logged_in(self, user_id: str, when_epoch_seconds: int) -> None:
         """Bump ``last_login_at`` on every successful login.
 
@@ -647,7 +695,7 @@ class SqlAlchemyAccountStore:
         :raises ValueError: On an unknown kind. Fail fast so the
             DB-level error never has to surface to the route.
         """
-        if kind not in ("invite", "magic"):
+        if kind not in ("invite", "magic", "verify"):
             raise ValueError(f"unknown token kind {kind!r}")
 
         def write(session: Session) -> AccountToken:

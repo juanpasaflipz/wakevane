@@ -30,6 +30,10 @@ export interface LoginSuccess {
   user: { id: string; is_admin: boolean };
   token: string;
   expires_in: number;
+  /** Open signup with mail configured: a verification link was (or wasn't) sent. */
+  email_verification?: { email: string; sent: boolean };
+  /** Open signup without mail: the welcome credit granted at registration. */
+  welcome_grant?: { allowance_usd: number; expires_at: number; capabilities: string[] };
 }
 
 /** Login failure — kept opaque on purpose (don't leak which check failed). */
@@ -51,6 +55,8 @@ export interface CurrentAccount {
   last_login_at: number | null;
   /** Optional contact address given at open signup; null otherwise. */
   email?: string | null;
+  /** Unix seconds when the address was confirmed; null until then. */
+  email_verified_at?: number | null;
 }
 
 /**
@@ -129,6 +135,28 @@ export async function logout(): Promise<void> {
  * :returns: The current :class:`CurrentAccount`, or ``null`` if
  *     unauthenticated.
  */
+/**
+ * POST /auth/verify-email/resend — send a fresh verification link to the
+ * signed-in user's address. Resolves with the server's error text on failure.
+ */
+export async function resendVerification(): Promise<{ ok: true } | { ok: false; error: string }> {
+  let res: Response;
+  try {
+    res = await fetch(withBasePath("/auth/verify-email/resend"), { method: "POST" });
+  } catch {
+    return { ok: false, error: "Could not reach the server." };
+  }
+  if (res.ok) return { ok: true };
+  let error = "Could not send the email.";
+  try {
+    const data = (await res.json()) as { error?: string };
+    if (data.error) error = data.error;
+  } catch {
+    // pass
+  }
+  return { ok: false, error };
+}
+
 export async function getMe(): Promise<CurrentAccount | null> {
   let res: Response;
   try {
@@ -304,6 +332,8 @@ export interface AccountListEntry {
   last_login_at: number | null;
   /** Optional contact address given at open signup; null otherwise. */
   email?: string | null;
+  /** Unix seconds when the address was confirmed; null until then. */
+  email_verified_at?: number | null;
   has_password: boolean;
 }
 

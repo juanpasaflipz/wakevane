@@ -2375,3 +2375,172 @@ def test_open_signup_grants_welcome_credit(accounts_app_welcome_credit: TestClie
         _login(_TC(app.app), "carol", "bbbbbbbb").get("/v1/funded-trial").json()["allowance_usd"]
         == 3.0
     )
+
+
+# ── Email verification gates the welcome credit ───────────────────
+
+
+@pytest.fixture
+def accounts_app_verified_credit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[tuple[TestClient, list[dict[str, str]]]]:
+    """Open signup + welcome grant + a mailer whose sends are captured in memory."""
+    import json as _json
+
+    from omnigent.server.mailer import SmtpMailer
+
+    outbox: list[dict[str, str]] = []
+
+    def fake_send(self: SmtpMailer, *, to: str, subject: str, text: str) -> None:
+        outbox.append({"to": to, "subject": subject, "text": text})
+
+    monkeypatch.setattr(SmtpMailer, "send", fake_send)
+    monkeypatch.setenv("OMNIGENT_SMTP_HOST", "smtp.test.invalid")
+    monkeypatch.setenv("OMNIGENT_SMTP_USERNAME", "sender@test.invalid")
+    monkeypatch.setenv("OMNIGENT_SMTP_PASSWORD", "app-password-synthetic")
+    monkeypatch.setenv("OMNIGENT_SMTP_FROM", "WakeVane <hello@test.invalid>")
+    monkeypatch.setenv("OMNIGENT_ACCOUNTS_OPEN_SIGNUP", "1")
+    monkeypatch.setenv("OMNIGENT_FEATURES", "funded_trial")
+    monkeypatch.setenv("OMNIGENT_FUNDED_TRIAL_SIGNING_KEY", "s" * 40)
+    monkeypatch.setenv("OMNIGENT_FUNDED_TRIAL_ANTHROPIC_API_KEY", "sk-service-synthetic")
+    monkeypatch.setenv(
+        "OMNIGENT_FUNDED_TRIAL_CONFIG",
+        _json.dumps(
+            {
+                "models": {
+                    "claude-sonnet-test": {
+                        "input": 3,
+                        "output": 15,
+                        "cache_read": 0.3,
+                        "cache_write": 3.75,
+                    }
+                },
+                "compute_usd_per_hour": {"modal": 0.5},
+                "welcome_grant": {
+                    "allowance_usd": 3,
+                    "expires_in_days": 7,
+                    "max_per_source_per_week": 0,
+                },
+            }
+        ),
+    )
+    for client in _build_accounts_app(tmp_path, monkeypatch, init_admin_password="admin-pw-12345"):
+        yield client, outbox
+
+
+def _verification_link(outbox: list[dict[str, str]]) -> str:
+    import re as _re
+
+    match = _re.search(r"(/auth/verify-email\?t=[A-Za-z0-9_-]+)", outbox[-1]["text"])
+    assert match, outbox[-1]["text"]
+    return match.group(1)
+
+
+def test_open_signup_requires_a_real_email_when_mail_is_configured(
+    accounts_app_verified_credit: tuple[TestClient, list[dict[str, str]]],
+) -> None:
+    app, _outbox = accounts_app_verified_credit
+    from fastapi.testclient import TestClient as _TC
+
+    missing = _TC(app.app).post(
+        "/auth/register", json={"username": "carol", "password": "aaaaaaaa"}
+    )
+    assert missing.status_code == 400 and "email is required" in missing.json()["error"]
+    throwaway = _TC(app.app).post(
+        "/auth/register",
+        json={"username": "carol", "password": "aaaaaaaa", "email": "x@mailinator.com"},
+    )
+    assert throwaway.status_code == 400 and "disposable" in throwaway.json()["error"]
+    # Invited accounts are unaffected: no email needed.
+    admin = _login(app, "admin", "admin-pw-12345")
+    token = admin.post("/auth/invite", json={}).json()["token"]
+    invited = _TC(app.app).post(
+        "/auth/register", json={"invite": token, "username": "dave", "password": "cccccccc"}
+    )
+    assert invited.status_code == 200 and "email_verification" not in invited.json()
+
+
+def test_credit_arrives_only_after_the_verification_link_is_opened(
+    accounts_app_verified_credit: tuple[TestClient, list[dict[str, str]]],
+) -> None:
+    app, outbox = accounts_app_verified_credit
+    from fastapi.testclient import TestClient as _TC
+
+    created = _TC(app.app).post(
+        "/auth/register",
+        json={"username": "carol", "password": "aaaaaaaa", "email": "Carol.Smith+wv@Gmail.com"},
+    )
+    assert created.status_code == 200, created.json()
+    assert "welcome_grant" not in created.json()
+    assert created.json()["email_verification"] == {
+        "email": "carol.smith+wv@gmail.com",
+        "sent": True,
+    }
+    assert outbox[-1]["to"] == "carol.smith+wv@gmail.com"
+    assert outbox[-1]["subject"] == "Confirm your WakeVane email"
+
+    carol = _login(_TC(app.app), "carol", "aaaaaaaa")
+    before = carol.get("/v1/funded-trial").json()
+    assert before["enabled"] is False
+    assert before["welcome_grant"] == {"allowance_usd": 3.0, "expires_in_days": 7.0}
+    assert carol.get("/auth/me").json()["email_verified_at"] is None
+
+    link = _verification_link(outbox)
+    opened = _TC(app.app).get(link, follow_redirects=False)
+    assert opened.status_code == 302
+    assert opened.headers["location"].endswith("/settings/billing?verified=1")
+
+    after = carol.get("/v1/funded-trial").json()
+    assert after["enabled"] is True and after["funding"] == "trial"
+    assert after["allowance_usd"] == 3.0
+    assert carol.get("/auth/me").json()["email_verified_at"] is not None
+
+    # The link is single use, and a second open changes nothing.
+    again = _TC(app.app).get(link, follow_redirects=False)
+    assert again.headers["location"].endswith("?verified=expired")
+    assert carol.get("/v1/funded-trial").json()["allowance_usd"] == 3.0
+    # Resend is refused once verified.
+    assert carol.post("/auth/verify-email/resend").status_code == 409
+
+
+def test_one_mailbox_earns_one_credit_across_gmail_aliases(
+    accounts_app_verified_credit: tuple[TestClient, list[dict[str, str]]],
+) -> None:
+    app, outbox = accounts_app_verified_credit
+    from fastapi.testclient import TestClient as _TC
+
+    for name, address in (("erin", "erin.k@gmail.com"), ("erin2", "erink+promo@googlemail.com")):
+        resp = _TC(app.app).post(
+            "/auth/register", json={"username": name, "password": "aaaaaaaa", "email": address}
+        )
+        assert resp.status_code == 200, resp.json()
+        opened = _TC(app.app).get(_verification_link(outbox), follow_redirects=False)
+        assert "verified=1" in opened.headers["location"]
+    first = _login(_TC(app.app), "erin", "aaaaaaaa").get("/v1/funded-trial").json()
+    second = _login(_TC(app.app), "erin2", "aaaaaaaa").get("/v1/funded-trial").json()
+    assert first["enabled"] is True
+    assert second["enabled"] is False  # verified, but the mailbox was already rewarded
+
+
+def test_resend_sends_a_fresh_link_and_is_rate_limited(
+    accounts_app_verified_credit: tuple[TestClient, list[dict[str, str]]],
+) -> None:
+    app, outbox = accounts_app_verified_credit
+    from fastapi.testclient import TestClient as _TC
+
+    assert (
+        _TC(app.app)
+        .post(
+            "/auth/register", json={"username": "frank", "password": "aaaaaaaa", "email": "f@x.io"}
+        )
+        .status_code
+        == 200
+    )
+    frank = _login(_TC(app.app), "frank", "aaaaaaaa")
+    first_link = _verification_link(outbox)
+    resent = frank.post("/auth/verify-email/resend")
+    assert resent.status_code == 200 and resent.json() == {"sent": True, "email": "f@x.io"}
+    assert _verification_link(outbox) != first_link
+    assert frank.post("/auth/verify-email/resend").status_code == 429
+    # Any unexpired link still works.
+    assert "verified=1" in _TC(app.app).get(first_link, follow_redirects=False).headers["location"]

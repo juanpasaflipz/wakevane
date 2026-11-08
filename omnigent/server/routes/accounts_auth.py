@@ -43,6 +43,7 @@ from omnigent.server.admin_list import AdminList, promote_if_listed
 from omnigent.server.auth import _RESERVED_USERS, RESERVED_USER_LOCAL, UnifiedAuthProvider
 from omnigent.server.funded_trial import FundedTrialPolicy
 from omnigent.server.funded_trial_store import MICROS_PER_USD
+from omnigent.server.mailer import SmtpMailer
 from omnigent.server.oidc import mint_session_cookie
 from omnigent.server.passwords import (
     InvalidPasswordError,
@@ -50,6 +51,7 @@ from omnigent.server.passwords import (
     needs_rehash,
     verify_password,
 )
+from omnigent.server.signup_email import blocked_domain, normalize_email
 from omnigent.stores.permission_store import PermissionStore
 
 if TYPE_CHECKING:
@@ -211,21 +213,6 @@ def _validate_username(username: str) -> str | None:
     return None
 
 
-_EMAIL_RE = r"[^@\s]+@[^@\s]+\.[^@\s]{2,}"
-
-
-def _normalize_email(email: str | None) -> tuple[str | None, str | None]:
-    """Return ``(normalized, error)``; an empty value means no address given."""
-    if email is None:
-        return None, None
-    norm = email.strip().lower()
-    if norm == "":
-        return None, None
-    if len(norm) > 254 or not re.fullmatch(_EMAIL_RE, norm):
-        return None, "email must look like name@example.com"
-    return norm, None
-
-
 def _registration_source(request: Request, secret: bytes) -> str | None:
     """Opaque tag for the registering client, used to cap welcome grants.
 
@@ -263,6 +250,7 @@ def create_accounts_auth_router(
     device_grant_store: DeviceGrantStore | None = None,
     scheduled_task_store: ScheduledTaskStore | None = None,
     funded_trial: FundedTrialPolicy | None = None,
+    mailer: SmtpMailer | None = None,
 ) -> APIRouter:
     """Build the ``/auth/*`` router for the accounts provider.
 
@@ -295,7 +283,10 @@ def create_accounts_auth_router(
         disarms the scheduler timers of the deleted user's tasks (the
         rows themselves are disabled by ``AccountStore.delete_user``).
     :param funded_trial: When set and its config names a ``welcome_grant``,
-        every open-signup registration receives that trial grant.
+        an open-signup account receives that trial grant once its email
+        is verified (or at registration when no mailer is configured).
+    :param mailer: Sends verification links; ``None`` disables email
+        verification and the open-signup email stays optional.
     :returns: APIRouter to mount at ``/auth``.
     """
     if auth_provider._source != "accounts":
@@ -457,6 +448,7 @@ def create_accounts_auth_router(
                 "created_at": user.created_at,
                 "last_login_at": user.last_login_at,
                 "email": user.email,
+                "email_verified_at": user.email_verified_at,
             },
         )
 
@@ -522,9 +514,17 @@ def create_accounts_auth_router(
             return JSONResponse(status_code=400, content={"error": err})
 
         username = body.username.strip().lower()
-        email, email_err = _normalize_email(body.email)
+        email, email_key, email_err = normalize_email(body.email)
         if email_err is not None:
             return JSONResponse(status_code=400, content={"error": email_err})
+        open_signup = body.invite is None
+        if open_signup and mailer is not None and email is None:
+            return JSONResponse(status_code=400, content={"error": "email is required"})
+        if open_signup and email_key is not None and blocked_domain(email_key):
+            return JSONResponse(
+                status_code=400,
+                content={"error": "disposable email domains are not accepted"},
+            )
         if account_store.get_user(username) is not None:
             # Don't burn the invite — the user can retry with a
             # different name on the same URL.
@@ -551,7 +551,8 @@ def create_accounts_auth_router(
                 is_admin=invited_is_admin,
                 # Invited accounts are reached through the inviter; only
                 # self-serve signups leave a contact address.
-                email=email if body.invite is None else None,
+                email=email if open_signup else None,
+                email_key=email_key if open_signup else None,
             )
         except ValueError:
             # Genuine race against another registrant using the same
@@ -559,9 +560,14 @@ def create_accounts_auth_router(
             return JSONResponse(status_code=409, content={"error": "username already taken"})
 
         welcome = None
-        if body.invite is None and funded_trial is not None:
-            # A failed welcome grant must never fail the registration:
-            # the account exists and an operator can grant by hand.
+        verification_sent: bool | None = None
+        if open_signup and mailer is not None and email is not None:
+            # Credit waits for the verification link; the account exists
+            # either way and the user can resend from Settings › Billing.
+            verification_sent = await asyncio.to_thread(_send_verification, username, email)
+        elif open_signup and funded_trial is not None:
+            # No mailer: fall back to granting at registration. A failed
+            # grant never fails the registration; an operator can grant by hand.
             try:
                 welcome = await asyncio.to_thread(
                     funded_trial.grant_welcome,
@@ -599,6 +605,8 @@ def create_accounts_auth_router(
                 "expires_at": welcome.expires_at,
                 "capabilities": sorted(welcome.capabilities),
             }
+        if verification_sent is not None:
+            content["email_verification"] = {"email": email, "sent": verification_sent}
         resp = JSONResponse(status_code=200, content=content)
         _set_session_cookie(
             resp,
@@ -608,14 +616,130 @@ def create_accounts_auth_router(
             max_age_seconds=_session_max_age,
         )
         _logger.info(
-            "auth/register: %s created via %s (admin=%s, email=%s, welcome=%s)",
+            "auth/register: %s created via %s (admin=%s, email=%s, welcome=%s, verify=%s)",
             _redact_for_log(username),
             "invite" if body.invite is not None else "open signup",
             invited_is_admin,
             email is not None,
             welcome is not None,
+            verification_sent,
         )
         return resp
+
+    _verify_ttl_seconds = 24 * 3600
+    _resend_min_interval_s = 60
+    _last_resend: dict[str, int] = {}
+
+    def _send_verification(user_id: str, email: str) -> bool:
+        """Mint a single-use verify token and mail its link; False if sending failed."""
+        assert mailer is not None
+        now = int(time.time())
+        token_id = secrets.token_urlsafe(32)
+        account_store.create_token(
+            token_id,
+            kind="verify",
+            user_id=user_id,
+            created_by=None,
+            created_at=now,
+            expires_at=now + _verify_ttl_seconds,
+        )
+        link = f"{config.base_url}/auth/verify-email?t={token_id}"
+        text = (
+            f"Hi {user_id},\n\n"
+            "Confirm this address to finish setting up your WakeVane account"
+            " and unlock your trial credit:\n\n"
+            f"{link}\n\n"
+            "The link works once and expires in 24 hours. If you did not create"
+            " this account, ignore this message.\n"
+        )
+        try:
+            mailer.send(to=email, subject="Confirm your WakeVane email", text=text)
+        except Exception:
+            _logger.exception("auth/verify: could not send to %s", _redact_for_log(user_id))
+            return False
+        return True
+
+    @router.get("/verify-email")
+    async def verify_email(request: Request) -> Response:
+        """Consume a verification link, record it and issue the welcome credit.
+
+        Always redirects into Settings › Billing: ``?verified=1`` on success
+        (with ``&credit=0`` when verification succeeded but no credit was
+        issued), ``?verified=expired`` for a missing, used or stale link.
+        """
+        target = f"{config.base_url}/settings/billing"
+        token_id = request.query_params.get("t", "").strip()
+        if not token_id:
+            return RedirectResponse(url=f"{target}?verified=expired", status_code=302)
+        now = int(time.time())
+        token = account_store.redeem_token(token_id, kind="verify", now_epoch_seconds=now)
+        if token is None or token.user_id is None:
+            return RedirectResponse(url=f"{target}?verified=expired", status_code=302)
+        user = account_store.get_user(token.user_id)
+        if user is None or user.account_generation != token.account_generation:
+            return RedirectResponse(url=f"{target}?verified=expired", status_code=302)
+        first_time = await asyncio.to_thread(account_store.mark_email_verified, user.id, now)
+        granted = False
+        if first_time and funded_trial is not None:
+            # One mailbox, one credit: aliases of an already-verified address
+            # confirm fine but earn nothing.
+            duplicates = (
+                account_store.count_verified_with_email_key(
+                    user.email_key, exclude_user_id=user.id
+                )
+                if user.email_key
+                else 0
+            )
+            if duplicates == 0:
+                try:
+                    granted = (
+                        await asyncio.to_thread(
+                            funded_trial.grant_welcome,
+                            user.id,
+                            source=_registration_source(request, config.cookie_secret),
+                        )
+                        is not None
+                    )
+                except Exception:
+                    _logger.exception(
+                        "auth/verify: welcome grant failed for %s", _redact_for_log(user.id)
+                    )
+            else:
+                _logger.warning(
+                    "auth/verify: %s verified a mailbox already used by %d account(s); no credit",
+                    _redact_for_log(user.id),
+                    duplicates,
+                )
+        _logger.info(
+            "auth/verify: %s verified (first=%s, credit=%s)",
+            _redact_for_log(user.id),
+            first_time,
+            granted,
+        )
+        suffix = "" if granted or not first_time else "&credit=0"
+        return RedirectResponse(url=f"{target}?verified=1{suffix}", status_code=302)
+
+    @router.post("/verify-email/resend")
+    async def resend_verification(request: Request) -> Response:
+        """Send a fresh verification link to the signed-in user's address."""
+        user_id = auth_provider.get_user_id(request)
+        if user_id is None:
+            return JSONResponse(status_code=401, content={"error": "not authenticated"})
+        user = account_store.get_user(user_id)
+        if user is None or not user.email:
+            return JSONResponse(status_code=400, content={"error": "no email on this account"})
+        if user.email_verified_at is not None:
+            return JSONResponse(status_code=409, content={"error": "email already verified"})
+        if mailer is None:
+            return JSONResponse(status_code=503, content={"error": "email is not configured"})
+        now = int(time.time())
+        if now - _last_resend.get(user_id, 0) < _resend_min_interval_s:
+            return JSONResponse(status_code=429, content={"error": "try again in a minute"})
+        _last_resend[user_id] = now
+        sent = await asyncio.to_thread(_send_verification, user_id, user.email)
+        if not sent:
+            return JSONResponse(status_code=502, content={"error": "could not send the email"})
+        return JSONResponse(status_code=200, content={"sent": True, "email": user.email})
 
     @router.post("/setup")
     async def setup(body: SetupRequest) -> Response:
@@ -819,6 +943,7 @@ def create_accounts_auth_router(
                         "last_login_at": u.last_login_at,
                         "has_password": u.has_password,
                         "email": u.email,
+                        "email_verified_at": u.email_verified_at,
                     }
                     for u in users
                 ]

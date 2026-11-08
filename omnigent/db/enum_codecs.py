@@ -78,6 +78,7 @@ SESSION_LIVE_STATUS: dict[str, int] = {
 ACCOUNT_TOKEN_KIND: dict[str, int] = {
     "invite": 1,
     "magic": 2,
+    "verify": 3,
 }
 
 POLICY_TYPE: dict[str, int] = {

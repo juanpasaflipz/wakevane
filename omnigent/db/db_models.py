@@ -340,6 +340,10 @@ class SqlUser(OmnigentBase):
     last_login_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Optional contact address collected at open signup; never used to log in.
     email: Mapped[str | None] = mapped_column(String(254), nullable=True)
+    # Canonical form of ``email`` (provider aliases collapsed) so one mailbox
+    # can be recognised across accounts; set together with ``email``.
+    email_key: Mapped[str | None] = mapped_column(String(254), nullable=True)
+    email_verified_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class SqlPreference(OmnigentBase):
@@ -416,7 +420,7 @@ class SqlAccountToken(OmnigentBase):
     invited_is_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
 
     __table_args__ = (
-        CheckConstraint("kind IN (1, 2)", name="ck_account_tokens_kind"),
+        CheckConstraint("kind IN (1, 2, 3)", name="ck_account_tokens_kind"),
         Index("ix_account_tokens_expires_at", "workspace_id", "expires_at", "id"),
     )
 

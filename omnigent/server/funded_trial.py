@@ -450,7 +450,15 @@ class FundedTrialPolicy:
             return {"enabled": False, "capabilities": [], "remaining_usd": 0.0}
         grants = self.candidate_grants(user_id)
         if not grants:
-            return {"enabled": False, "capabilities": [], "remaining_usd": 0.0}
+            summary: dict[str, Any] = {"enabled": False, "capabilities": [], "remaining_usd": 0.0}
+            terms = self.config.welcome_grant
+            if terms is not None:
+                # Lets the UI tell an unverified member what verifying unlocks.
+                summary["welcome_grant"] = {
+                    "allowance_usd": terms.allowance_usd,
+                    "expires_in_days": terms.expires_in_days,
+                }
+            return summary
         now = int(self._clock())
         active = [grant for grant in grants if grant.inactive_reason(now) is None]
         grant = active[0] if active else grants[0]

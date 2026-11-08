@@ -39,6 +39,10 @@ class Account:
         "Password login" badges without exposing the hash itself.
     :param email: Optional contact address given at open signup.
         ``None`` for invited, bootstrap and external accounts.
+    :param email_verified_at: Unix epoch seconds when the owner opened
+        the verification link; ``None`` until then.
+    :param email_key: Canonical form of ``email`` used to recognise one
+        mailbox across accounts; internal, not sent over the wire.
     """
 
     id: str
@@ -48,6 +52,8 @@ class Account:
     has_password: bool
     account_generation: str | None = None
     email: str | None = None
+    email_verified_at: int | None = None
+    email_key: str | None = None
 
 
 @dataclasses.dataclass(frozen=True)

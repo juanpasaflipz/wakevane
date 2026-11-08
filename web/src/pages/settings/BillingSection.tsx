@@ -24,6 +24,7 @@ import {
   hasTrialCredit,
   type FundedTrialSummary,
 } from "@/lib/fundedTrialApi";
+import { getMe, resendVerification, type CurrentAccount } from "@/lib/accountsApi";
 
 function usd(value: number | undefined | null): string {
   return `$${(value ?? 0).toFixed(2)}`;
@@ -48,15 +49,19 @@ export function BillingSection() {
   // Welcome / operator trial credit lives in the funded-trial ledger, not the
   // seat; a failed lookup only hides the panel and never blocks billing.
   const [trial, setTrial] = useState<FundedTrialSummary | null>(null);
+  const [account, setAccount] = useState<CurrentAccount | null>(null);
+  const [resending, setResending] = useState(false);
   const [busy, setBusy] = useState(false);
   const [capDraft, setCapDraft] = useState<string>("");
 
   const reload = useCallback(async () => {
-    const [billing, funded] = await Promise.allSettled([
+    const [billing, funded, me] = await Promise.allSettled([
       getBillingSummary(),
       getFundedTrialSummary(),
+      getMe(),
     ]);
     setTrial(funded.status === "fulfilled" ? funded.value : null);
+    setAccount(me.status === "fulfilled" ? me.value : null);
     if (billing.status === "fulfilled") {
       setSummary(billing.value);
       setCapDraft(String(billing.value.overage?.cap_usd ?? billing.value.default_overage_cap_usd));
@@ -73,7 +78,26 @@ export function BillingSection() {
     const checkout = params.get("checkout");
     if (checkout === "success") toast.success("Thanks! Your seat is being activated.");
     if (checkout === "canceled") toast.message("Checkout canceled. Nothing was charged.");
+    const verified = params.get("verified");
+    if (verified === "1" && params.get("credit") === "0") {
+      toast.message("Email confirmed. This mailbox already received a trial credit.");
+    } else if (verified === "1") {
+      toast.success("Email confirmed. Your trial credit is ready.");
+    } else if (verified === "expired") {
+      toast.error("That confirmation link has expired or was already used. Send a new one below.");
+    }
+    if (params.get("verify") === "sent") {
+      toast.message("Check your inbox for the confirmation link.");
+    }
   }, [params]);
+
+  const onResend = useCallback(async () => {
+    setResending(true);
+    const result = await resendVerification();
+    setResending(false);
+    if (result.ok) toast.success("Sent. Check your inbox.");
+    else toast.error(result.error);
+  }, []);
 
   const onCheckout = useCallback(async (plan: string) => {
     setBusy(true);
@@ -137,9 +161,32 @@ export function BillingSection() {
   const ends = periodEnd(summary);
   const trialCredit = hasTrialCredit(trial) ? trial : null;
   const trialEnds = formatDay(trialCredit?.expires_at);
+  const pendingCredit =
+    !trialCredit && !!account?.email && !account.email_verified_at ? trial?.welcome_grant : null;
 
   return (
     <div className="space-y-8" data-testid="billing-section">
+      {pendingCredit && (
+        <section className="space-y-3" data-testid="billing-verify-email">
+          <SettingsLabel
+            label="Confirm your email"
+            description={`A link went to ${account?.email}. Open it to unlock ${usd(pendingCredit.allowance_usd)} of trial usage, good for ${pendingCredit.expires_in_days} days.`}
+          />
+          <div className="rounded-lg border p-4 flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-muted-foreground">
+              Didn't get it? Check spam, then send a new link.
+            </p>
+            <Button
+              variant="outline"
+              disabled={resending}
+              onClick={() => void onResend()}
+              componentId="billing.verify.resend"
+            >
+              {resending ? "Sending…" : "Resend link"}
+            </Button>
+          </div>
+        </section>
+      )}
       {trialCredit && (
         <section className="space-y-3" data-testid="billing-trial-credit">
           <SettingsLabel

@@ -143,6 +143,16 @@ service key is attached server-side only.
   is the most one registration source (a keyed hash of the client address,
   taken from `CF-Connecting-IP`) may receive in 7 days. A refused grant is
   logged and the account is still created, just without credit.
+  With a mailer configured (`OMNIGENT_SMTP_HOST`, `OMNIGENT_SMTP_PORT` default
+  587 with STARTTLS, `OMNIGENT_SMTP_USERNAME`, `OMNIGENT_SMTP_PASSWORD`,
+  `OMNIGENT_SMTP_FROM`), open signup requires an email, refuses throwaway
+  domains (built-in list plus `OMNIGENT_SIGNUP_BLOCKED_EMAIL_DOMAINS`), and
+  the credit is issued only when the single-use link in the confirmation mail
+  is opened (`GET /auth/verify-email`, 24-hour expiry, resend via
+  `POST /auth/verify-email/resend`). Addresses are canonicalised (Gmail dots
+  and `+` tags collapsed) so one mailbox earns one credit across accounts.
+  Without a mailer the email stays optional and the grant is issued at
+  registration, subject to the same caps.
   Invited accounts never receive it,
   and an account that already holds a trial grant keeps its ledger, so
   deleting and re-registering mints no new allowance. The grant is written

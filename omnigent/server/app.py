@@ -4813,6 +4813,7 @@ def create_app(
             and account_store is not None
         ):
             from omnigent.server.auth import AccountAuthenticationMiddleware
+            from omnigent.server.mailer import SmtpMailer
             from omnigent.server.routes.accounts_auth import (
                 create_accounts_auth_router,
             )
@@ -4830,6 +4831,7 @@ def create_app(
                     device_grant_store,
                     scheduled_task_store,
                     funded_trial=getattr(app.state, "funded_trial", None),
+                    mailer=SmtpMailer.from_environment(),
                 ),
                 prefix="/auth",
                 tags=["auth"],

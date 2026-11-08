@@ -4,8 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/identity", () => ({ authenticatedFetch: vi.fn() }));
 vi.mock("@/lib/routing", () => ({ useSearchParams: () => [new URLSearchParams()] }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), message: vi.fn(), error: vi.fn() } }));
+vi.mock("@/lib/accountsApi", () => ({ getMe: vi.fn(), resendVerification: vi.fn() }));
 
 import { authenticatedFetch } from "@/lib/identity";
+import { getMe, resendVerification } from "@/lib/accountsApi";
+import userEvent from "@testing-library/user-event";
 import { BillingSection } from "./BillingSection";
 
 const BILLING_UNSUBSCRIBED = {
@@ -36,6 +39,10 @@ afterEach(() => {
   cleanup();
   vi.resetAllMocks();
 });
+
+function mockMe(account: Record<string, unknown> | null) {
+  vi.mocked(getMe).mockResolvedValue(account as never);
+}
 
 describe("BillingSection trial credit", () => {
   it("shows a welcome trial grant to an unsubscribed member", async () => {
@@ -71,5 +78,46 @@ describe("BillingSection trial credit", () => {
     await screen.findByTestId("billing-section");
     expect(screen.queryByTestId("billing-trial-credit")).toBeNull();
     expect(screen.getByText(/Subscribe to pro/)).toBeInTheDocument();
+  });
+
+  it("asks an unverified member to confirm their email and can resend the link", async () => {
+    mockRoutes({
+      enabled: false,
+      capabilities: [],
+      remaining_usd: 0,
+      welcome_grant: { allowance_usd: 3, expires_in_days: 7 },
+    });
+    mockMe({ id: "carol", is_admin: false, email: "carol@example.org", email_verified_at: null });
+    vi.mocked(resendVerification).mockResolvedValue({ ok: true });
+    render(<BillingSection />);
+    const panel = await screen.findByTestId("billing-verify-email");
+    expect(panel).toHaveTextContent("carol@example.org");
+    expect(panel).toHaveTextContent("$3.00");
+    expect(screen.queryByTestId("billing-trial-credit")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Resend link" }));
+    expect(resendVerification).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not ask for confirmation once the email is verified or when none was given", async () => {
+    mockRoutes({
+      enabled: false,
+      capabilities: [],
+      remaining_usd: 0,
+      welcome_grant: { allowance_usd: 3, expires_in_days: 7 },
+    });
+    mockMe({
+      id: "dave",
+      is_admin: false,
+      email: "dave@example.org",
+      email_verified_at: 1794000000,
+    });
+    render(<BillingSection />);
+    await screen.findByTestId("billing-section");
+    expect(screen.queryByTestId("billing-verify-email")).toBeNull();
+    cleanup();
+    mockMe({ id: "invited", is_admin: false, email: null, email_verified_at: null });
+    render(<BillingSection />);
+    await screen.findByTestId("billing-section");
+    expect(screen.queryByTestId("billing-verify-email")).toBeNull();
   });
 });

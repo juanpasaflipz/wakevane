@@ -19,6 +19,8 @@ export interface FundedTrialSummary {
   remaining_usd: number;
   expires_at?: number | null;
   models?: string[];
+  /** Present (with no grant) when the deployment offers a welcome credit. */
+  welcome_grant?: { allowance_usd: number; expires_in_days: number };
 }
 
 /** Resolves to ``null`` when the route is absent (funded trial feature off). */
