@@ -737,6 +737,22 @@ class FundedTrialStore:
                 or 0
             )
 
+    def count_events_since(self, event: str, *, since: int, actor_id: str | None = None) -> int:
+        """Number of audit events of one type recorded at or after ``since``.
+
+        ``actor_id`` narrows the count to one actor tag, which the welcome
+        grant uses to count grants per registration source.
+        """
+        conditions = [
+            SqlFundedTrialEvent.workspace_id == current_workspace_id(),
+            SqlFundedTrialEvent.event == event,
+            SqlFundedTrialEvent.created_at >= since,
+        ]
+        if actor_id is not None:
+            conditions.append(SqlFundedTrialEvent.actor_id == actor_id)
+        with self._session("count_funded_trial_events_since") as session:
+            return int(session.scalar(select(func.count()).where(*conditions)) or 0)
+
     def list_events(self, user_id: str, *, limit: int = 100) -> list[dict[str, Any]]:
         """Most recent audit events for the account."""
         with self._session("list_funded_trial_events") as session:

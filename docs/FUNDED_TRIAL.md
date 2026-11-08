@@ -137,7 +137,13 @@ service key is attached server-side only.
   Optional `welcome_grant` gives every open-signup registration a trial grant:
   `{"allowance_usd": 3, "expires_in_days": 7, "capabilities": ["inference",
   "compute", "coding", "pull_request"], "max_concurrent_roots": 1}`
-  (`capabilities` defaults to all four). Invited accounts never receive it,
+  (`capabilities` defaults to all four). Two caps bound abuse: `max_per_day`
+  (default 20) is the most welcome grants the deployment issues in any
+  rolling 24 hours, and `max_per_source_per_week` (default 1, `0` disables)
+  is the most one registration source (a keyed hash of the client address,
+  taken from `CF-Connecting-IP`) may receive in 7 days. A refused grant is
+  logged and the account is still created, just without credit.
+  Invited accounts never receive it,
   and an account that already holds a trial grant keeps its ledger, so
   deleting and re-registering mints no new allowance. The grant is written
   by `/auth/register` after the account exists; a failure there is logged

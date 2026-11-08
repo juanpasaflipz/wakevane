@@ -18,6 +18,7 @@ import copy
 import hashlib
 import hmac
 import json
+import logging
 import os
 import time
 from collections.abc import Mapping
@@ -36,11 +37,13 @@ from omnigent.server.funded_trial_store import (
 
 CONFIG_ENV_VAR = "OMNIGENT_FUNDED_TRIAL_CONFIG"
 TRIAL_PROVIDER = "wakevane-trial"
+WELCOME_EVENT = "welcome_grant"
 TRIAL_HARNESSES = ("claude-sdk", "claude-native")
 GATEWAY_PATH = "/v1/funded-trial/gateway/anthropic"
 # Placeholder reference in catalogs and snapshots; launches replace it with a minted token.
 _TOKEN_REF = "env:WAKEVANE_TRIAL_GATEWAY_TOKEN"
 _TOKEN_PREFIX = "wvt1."
+_logger = logging.getLogger(__name__)
 _MAX_TOKEN_LIFETIME_S = 12 * 3600
 
 
@@ -62,12 +65,19 @@ class WelcomeGrant:
     :param expires_in_days: Days after registration the grant lapses.
     :param capabilities: Subset of the trial capabilities to allow.
     :param max_concurrent_roots: Root workflows the grant may run at once.
+    :param max_per_day: Welcome grants the deployment issues in any rolling
+        24 hours; later signups still succeed but get no credit. Bounds the
+        money a scripted signup run can extract.
+    :param max_per_source_per_week: Welcome grants one registration source
+        (hashed client address) may receive in 7 days; 0 disables the check.
     """
 
     allowance_usd: float
     expires_in_days: float
     capabilities: frozenset[str]
     max_concurrent_roots: int = 1
+    max_per_day: int = 20
+    max_per_source_per_week: int = 1
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> WelcomeGrant:
@@ -82,11 +92,20 @@ class WelcomeGrant:
         roots = int(raw.get("max_concurrent_roots", 1))
         if roots < 1:
             raise ValueError("welcome_grant max_concurrent_roots must be at least 1")
+        per_day = int(raw.get("max_per_day", cls.max_per_day))
+        per_source = int(raw.get("max_per_source_per_week", cls.max_per_source_per_week))
+        if per_day < 1 or per_source < 0:
+            raise ValueError(
+                "welcome_grant max_per_day must be at least 1 and "
+                "max_per_source_per_week non-negative"
+            )
         return cls(
             allowance_usd=allowance,
             expires_in_days=days,
             capabilities=requested,
             max_concurrent_roots=roots,
+            max_per_day=per_day,
+            max_per_source_per_week=per_source,
         )
 
 
@@ -367,27 +386,63 @@ class FundedTrialPolicy:
             )
         raise last
 
-    def grant_welcome(self, user_id: str) -> TrialGrant | None:
+    def grant_welcome(self, user_id: str, *, source: str | None = None) -> TrialGrant | None:
         """Give a newly registered open-signup account its welcome trial.
 
         Returns ``None`` when the trial is disabled, nothing is configured,
-        or the account already holds a trial grant (re-registration after a
+        the account already holds a trial grant (re-registration after a
         deletion keeps the original ledger rather than minting fresh
-        allowance).
+        allowance), the deployment's rolling daily cap is reached, or the
+        registration source already received its weekly share. Registration
+        itself never fails because of this; the account simply starts
+        without credit.
+
+        :param source: Opaque registration source tag (a hashed client
+            address); ``None`` skips the per-source check.
         """
         terms = self.config.welcome_grant
         if not self.enabled or self.store is None or terms is None or not user_id:
             return None
-        if self.store.get_grant(user_id, "trial") is not None:
+        store = self.store
+        if store.get_grant(user_id, "trial") is not None:
             return None
-        return self.store.upsert_grant(
+        now = int(self._clock())
+        issued_today = store.count_events_since(WELCOME_EVENT, since=now - 86_400)
+        if issued_today >= terms.max_per_day:
+            _logger.warning(
+                "welcome grant refused for %s: daily cap %d reached", user_id, terms.max_per_day
+            )
+            return None
+        source_tag = f"source:{source}" if source else None
+        if source_tag is not None and terms.max_per_source_per_week > 0:
+            from_source = store.count_events_since(
+                WELCOME_EVENT, since=now - 7 * 86_400, actor_id=source_tag
+            )
+            if from_source >= terms.max_per_source_per_week:
+                _logger.warning(
+                    "welcome grant refused for %s: source already received %d this week",
+                    user_id,
+                    from_source,
+                )
+                return None
+        grant = store.upsert_grant(
             user_id,
             allowance_micros=_usd_to_micros(terms.allowance_usd),
-            expires_at=int(self._clock() + terms.expires_in_days * 86_400),
+            expires_at=int(now + terms.expires_in_days * 86_400),
             capabilities=terms.capabilities,
             max_concurrent_roots=terms.max_concurrent_roots,
             actor_id="system:welcome",
         )
+        # The source tag lives in actor_id so per-source counts stay a plain
+        # equality; the detail keeps the amount for audit.
+        store.record_event(
+            WELCOME_EVENT,
+            user_id=user_id,
+            actor_id=source_tag,
+            detail={"allowance_usd": terms.allowance_usd},
+            grant_id=grant.id,
+        )
+        return grant
 
     def summary(self, user_id: str | None) -> dict[str, Any]:
         """The caller's own effective capabilities and remaining allowance."""

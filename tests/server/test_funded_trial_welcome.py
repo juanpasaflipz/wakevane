@@ -80,3 +80,48 @@ def test_grant_welcome_is_idempotent_and_respects_the_switch(db_uri: str) -> Non
     )
     assert unconfigured.grant_welcome("dave") is None
     assert policy.grant_welcome("") is None
+
+
+def _policy(db_uri: str, clock: object, **welcome: object) -> FundedTrialPolicy:
+    config = FundedTrialConfig.from_mapping(
+        {
+            "models": _MODELS,
+            "welcome_grant": {"allowance_usd": 3, "expires_in_days": 7, **welcome},
+        }
+    )
+    return FundedTrialPolicy(
+        enabled=True, store=FundedTrialStore(db_uri, clock=clock), config=config, clock=clock
+    )
+
+
+def test_welcome_grant_caps_parse_and_reject_bad_values() -> None:
+    terms = WelcomeGrant.from_mapping(
+        {"allowance_usd": 3, "expires_in_days": 7, "max_per_day": 5, "max_per_source_per_week": 0}
+    )
+    assert (terms.max_per_day, terms.max_per_source_per_week) == (5, 0)
+    defaults = WelcomeGrant.from_mapping({"allowance_usd": 3, "expires_in_days": 7})
+    assert (defaults.max_per_day, defaults.max_per_source_per_week) == (20, 1)
+    for bad in ({"max_per_day": 0}, {"max_per_source_per_week": -1}):
+        with pytest.raises(ValueError):
+            WelcomeGrant.from_mapping({"allowance_usd": 3, "expires_in_days": 7, **bad})
+
+
+def test_daily_cap_stops_issuing_after_the_limit_and_resets(db_uri: str) -> None:
+    now = [1_700_000_000.0]
+    policy = _policy(db_uri, lambda: now[0], max_per_day=2, max_per_source_per_week=0)
+    assert policy.grant_welcome("a1") is not None
+    assert policy.grant_welcome("a2") is not None
+    assert policy.grant_welcome("a3") is None  # third signup of the day: account, no credit
+    now[0] += 86_400 + 1  # the rolling window has moved past the first two
+    assert policy.grant_welcome("a4") is not None
+
+
+def test_per_source_cap_counts_a_hashed_address_for_a_week(db_uri: str) -> None:
+    now = [1_700_000_000.0]
+    policy = _policy(db_uri, lambda: now[0], max_per_day=100, max_per_source_per_week=1)
+    assert policy.grant_welcome("b1", source="hash-A") is not None
+    assert policy.grant_welcome("b2", source="hash-A") is None  # same address, same week
+    assert policy.grant_welcome("b3", source="hash-B") is not None  # another address is fine
+    assert policy.grant_welcome("b4") is not None  # unknown source is not counted
+    now[0] += 7 * 86_400 + 1
+    assert policy.grant_welcome("b5", source="hash-A") is not None

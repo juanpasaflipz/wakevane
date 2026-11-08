@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import logging
 import re
 import secrets
@@ -223,6 +224,23 @@ def _normalize_email(email: str | None) -> tuple[str | None, str | None]:
     if len(norm) > 254 or not re.fullmatch(_EMAIL_RE, norm):
         return None, "email must look like name@example.com"
     return norm, None
+
+
+def _registration_source(request: Request, secret: bytes) -> str | None:
+    """Opaque tag for the registering client, used to cap welcome grants.
+
+    Prefers the address Cloudflare forwards (the proxy sits in front of the
+    public deployment) and falls back to the socket peer. Only a keyed hash
+    is stored, never the address itself.
+    """
+    address = (
+        request.headers.get("cf-connecting-ip")
+        or (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+        or (request.client.host if request.client else "")
+    )
+    if not address:
+        return None
+    return hashlib.sha256(secret + b":" + address.encode()).hexdigest()[:32]
 
 
 def _redact_for_log(user_id: str) -> str:
@@ -483,7 +501,7 @@ def create_accounts_auth_router(
         )
 
     @router.post("/register")
-    async def register(body: RegisterRequest) -> Response:
+    async def register(request: Request, body: RegisterRequest) -> Response:
         """Consume an invite, create the user, sign them in.
 
         Ordering: validate format → check name availability → THEN
@@ -545,7 +563,11 @@ def create_accounts_auth_router(
             # A failed welcome grant must never fail the registration:
             # the account exists and an operator can grant by hand.
             try:
-                welcome = await asyncio.to_thread(funded_trial.grant_welcome, username)
+                welcome = await asyncio.to_thread(
+                    funded_trial.grant_welcome,
+                    username,
+                    source=_registration_source(request, config.cookie_secret),
+                )
             except Exception:
                 _logger.exception(
                     "auth/register: welcome grant failed for %s", _redact_for_log(username)
