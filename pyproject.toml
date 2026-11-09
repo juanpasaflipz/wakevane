@@ -574,6 +574,11 @@ extend-exclude = [
     # Protobuf-generated code (DO NOT EDIT); not ours to restyle.
     "omnigent/api/**/*_pb2.py",
     "omnigent/api/**/*_pb2.pyi",
+    # Notebook test fixtures with intentionally unsorted imports and (for
+    # the "broken" case) invalid JSON, used to exercise the shell's
+    # notebook-rendering code under test. Not real notebooks/source for
+    # ruff to lint — see issue #5.
+    "web/src/shell/__fixtures__",
 ]
 
 [tool.ruff.format]
