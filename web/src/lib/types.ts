@@ -642,6 +642,9 @@ export interface FusionDescriptor {
 
 /** One runner-owned native model-picker row. */
 export interface NativeModelOption {
+  /** Hosted inference provider and approved USD rates per million tokens. */
+  providerLabel?: string;
+  pricing?: { input: number; output: number; cacheRead: number; cacheWrite: number };
   /** Native picker id (a Claude alias or Codex model id). */
   id: string;
   /** Provider-facing model id the native harness will run. */

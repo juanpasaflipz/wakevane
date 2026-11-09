@@ -1,7 +1,7 @@
 name: WakeVane staging images
 on:
   push:
-    branches: [staging/egm-orchestration-20261103]
+    branches: [staging/egm-orchestration-20261103, staging/model-planner-20261108]
 permissions:
   contents: read
 concurrency:

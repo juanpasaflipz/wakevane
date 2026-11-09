@@ -223,3 +223,26 @@ describe("ComposerConfigSections", () => {
     ).toBeInTheDocument();
   });
 });
+
+it("keeps hosted provider and pricing visible while selecting the model", () => {
+  const onSelect = vi.fn();
+  renderSections({
+    models: {
+      testId: "hosted-models",
+      header: "Models",
+      choices: [
+        {
+          key: "qwen-test",
+          label: "Qwen test",
+          description: "Hosted test · $2 input / $4 output per 1M tokens",
+          checked: false,
+          onSelect,
+        },
+      ],
+    },
+  });
+  const option = screen.getByRole("menuitemcheckbox", { name: /Qwen test.*Hosted test/ });
+  expect(option.textContent).toContain("$2 input / $4 output per 1M tokens");
+  fireEvent.click(option);
+  expect(onSelect).toHaveBeenCalledOnce();
+});

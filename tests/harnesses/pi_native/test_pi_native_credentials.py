@@ -4440,3 +4440,42 @@ def test_native_token_helper_reaps_its_process_group(
         if process.poll() is None:
             process.terminate()
             process.wait(timeout=4)
+
+
+@pytest.mark.parametrize("model", ["qwen-test", "deepseek-test", "kimi-test", "glm-test"])
+def test_funded_chat_binding_keeps_model_and_tool_reasoning(monkeypatch, model):
+    from omnigent.server.funded_trial import FundedTrialConfig, trial_inference_config
+
+    config = FundedTrialConfig.from_mapping(
+        {
+            "chat_providers": {
+                "hosted": {"base_url": "https://upstream.test/v1", "api_key_env": "SERVICE_KEY"}
+            },
+            "models": {
+                name: {
+                    "provider": "hosted",
+                    "input": 1,
+                    "output": 2,
+                    "cache_read": 0.5,
+                    "cache_write": 1,
+                }
+                for name in ("qwen-test", "deepseek-test", "kimi-test", "glm-test")
+            },
+        }
+    )
+    runtime = trial_inference_config("https://app.test", tuple(config.model_pricing), config)
+    monkeypatch.setenv("WAKEVANE_TRIAL_GATEWAY_TOKEN", "synthetic-scoped-token")
+    provider = creds.resolve_pi_native_provider(model=model, config_loader=lambda: runtime)
+    assert provider is not None and provider.model == model
+    rendered = provider.to_models_config()["providers"][provider.provider_id]
+    assert rendered["baseUrl"] == "https://app.test/v1/funded-trial/gateway/openai/v1"
+    assert rendered["api"] == "openai-completions"
+    assert rendered["compat"]["supportsUsageInStreaming"] is True
+    assert rendered["compat"]["supportsStore"] is False
+    assert rendered["compat"]["supportsReasoningEffort"] is False
+    assert {entry["id"] for entry in rendered["models"]} == set(config.model_pricing)
+    assert all(
+        entry["reasoning"] and entry["input"] == ["text"] and entry["maxTokens"] == 16000
+        for entry in rendered["models"]
+    )
+    assert "upstream.test" not in json.dumps(rendered)

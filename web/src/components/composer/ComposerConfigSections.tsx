@@ -6,6 +6,7 @@ import { PickerSectionHeader } from "./HarnessMenuRow";
 export interface ComposerConfigChoice {
   key: string;
   label: ReactNode;
+  description?: string;
   checked: boolean;
   disabled?: boolean;
   // Omitted for a static, non-selectable row (e.g. the disabled "(current)"
@@ -43,7 +44,14 @@ function ConfigChoices({ choices }: { choices: readonly ComposerConfigChoice[] }
           className={choice.className}
           {...choice.data}
         >
-          {choice.label}
+          {choice.description ? (
+            <span className="min-w-0">
+              <span className="block">{choice.label}</span>
+              <span className="block text-xs text-muted-foreground">{choice.description}</span>
+            </span>
+          ) : (
+            choice.label
+          )}
         </DropdownMenuCheckboxItem>
       ))}
     </>

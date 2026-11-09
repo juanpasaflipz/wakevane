@@ -1,6 +1,6 @@
 """Funded trial routes: caller summary, operator grants and the metered gateway.
 
-The gateway proxies Anthropic Messages requests from funded workspaces. Each
+The gateway proxies Anthropic Messages and Chat Completions from funded workspaces. Each
 request presents a short-lived scoped token, reserves its maximum cost in the
 shared ledger before dispatch, and settles the provider-reported usage after.
 The service API key is attached here and never reaches the workspace.
@@ -102,10 +102,35 @@ def _merge_usage(total: dict[str, int], usage: Any) -> None:
             total[key] = max(total.get(key, 0), value)
 
 
-class _StreamUsage:
-    """Incrementally parse Anthropic SSE frames for usage and completion."""
+def _chat_usage(usage: Any) -> dict[str, int]:
+    """Normalize inclusive prompt/cache counts without double-billing cache hits."""
+    if not isinstance(usage, dict):
+        return {}
+    prompt, output = usage.get("prompt_tokens"), usage.get("completion_tokens")
+    details = usage.get("prompt_tokens_details") or {}
+    cached = (
+        usage.get("prompt_cache_hit_tokens", details.get("cached_tokens", 0))
+        if isinstance(details, dict)
+        else None
+    )
+    if any(type(value) is not int or value < 0 for value in (prompt, output, cached)):
+        return {}
+    assert isinstance(prompt, int) and isinstance(output, int) and isinstance(cached, int)
+    if cached > prompt:
+        return {}
+    return {
+        "input_tokens": prompt - cached,
+        "output_tokens": output,
+        "cache_read_input_tokens": cached,
+    }
 
-    def __init__(self) -> None:
+
+class _StreamUsage:
+    """Incrementally parse Messages or Chat SSE usage and completion."""
+
+    def __init__(self, chat: bool = False) -> None:
+        self.chat = chat
+        self.failed = False
         self.usage: dict[str, int] = {}
         self.completed = False
         self._buffer = b""
@@ -117,11 +142,23 @@ class _StreamUsage:
             line = line.strip()
             if not line.startswith(b"data:"):
                 continue
+            payload = line[5:].strip()
+            if self.chat and payload == b"[DONE]":
+                self.completed = bool(self.usage) and not self.failed
+                continue
             try:
-                event = json.loads(line[5:].strip())
+                event = json.loads(payload)
             except ValueError:
                 continue
             if not isinstance(event, dict):
+                continue
+            if self.chat:
+                if event.get("error"):
+                    self.failed = True
+                    self.completed = False
+                normalized = _chat_usage(event.get("usage"))
+                if normalized:
+                    self.usage = normalized
                 continue
             kind = event.get("type")
             if kind == "message_start":
@@ -133,7 +170,7 @@ class _StreamUsage:
 
 
 def _validate_messages_body(
-    policy: FundedTrialPolicy, claims: GatewayClaims, raw: bytes
+    policy: FundedTrialPolicy, claims: GatewayClaims, raw: bytes, *, chat: bool = False
 ) -> tuple[dict[str, Any], str, int]:
     """Return the parsed body, model and enforced output bound, or raise."""
     if len(raw) > policy.config.max_request_bytes:
@@ -146,6 +183,66 @@ def _validate_messages_body(
         raise PermissionError(f"Model {model!r} is not approved for this funded session.")
     if model not in policy.config.model_pricing:
         raise PermissionError(f"Model {model!r} has no approved price.")
+    if (model in policy.config.model_routes) != chat:
+        raise PermissionError("Model is not available on this gateway protocol.")
+    if "tools" in body and not isinstance(body["tools"], list):
+        raise ValueError("tools must be a list.")
+    if chat:
+        allowed = {
+            "model",
+            "messages",
+            "max_tokens",
+            "max_completion_tokens",
+            "stream",
+            "stream_options",
+            "temperature",
+            "top_p",
+            "frequency_penalty",
+            "presence_penalty",
+            "stop",
+            "seed",
+            "tools",
+            "tool_choice",
+            "parallel_tool_calls",
+            "response_format",
+            "reasoning_effort",
+            "thinking",
+            "n",
+            "user",
+        }
+        if set(body) - allowed:
+            raise PermissionError("Unsupported fields in funded Chat Completions request.")
+        if type(body.get("n", 1)) is not int or body.get("n", 1) != 1:
+            raise ValueError("Funded requests must generate exactly one completion.")
+        if "stream" in body and type(body["stream"]) is not bool:
+            raise ValueError("stream must be a boolean.")
+        for tool in body.get("tools") or []:
+            if not isinstance(tool, dict) or tool.get("type") != "function":
+                raise PermissionError("Only client-executed function tools are available.")
+        messages = body.get("messages")
+        if not isinstance(messages, list) or not messages:
+            raise ValueError("messages must be a nonempty list.")
+        for message in messages:
+            if not isinstance(message, dict):
+                raise ValueError("Each message must be an object.")
+            content = message.get("content")
+            if content is not None and not isinstance(content, (str, list)):
+                raise ValueError("Message content must be text.")
+            if isinstance(content, list) and any(
+                not isinstance(part, dict)
+                or part.get("type") != "text"
+                or not isinstance(part.get("text"), str)
+                for part in content
+            ):
+                raise PermissionError("Funded chat models currently support text content only.")
+        bound = body.pop(
+            "max_completion_tokens", body.get("max_tokens", policy.config.max_output_tokens)
+        )
+        if type(bound) is not int or bound < 1:
+            raise ValueError("Output token limit must be a positive integer.")
+        body["max_tokens"] = min(bound, policy.config.max_output_tokens)
+        if body.get("stream"):
+            body["stream_options"] = {"include_usage": True}
     max_tokens = body.get("max_tokens")
     if (
         not isinstance(max_tokens, int)
@@ -277,6 +374,8 @@ def create_funded_trial_router(
             claims = await _authorize(request)
             raw = await request.body()
             _validate_count_body(claims, raw)
+            if json.loads(raw).get("model") in policy.config.model_routes:
+                raise PermissionError("Model is not available on this gateway protocol.")
             headers = _upstream_headers(request)
         except FundedTrialDenied as denied:
             return _denied(denied)
@@ -296,14 +395,61 @@ def create_funded_trial_router(
             media_type="application/json",
         )
 
+    @router.get("/funded-trial/gateway/openai/v1/models")
+    async def chat_models(request: Request) -> Response:
+        try:
+            claims = await _authorize(request)
+        except FundedTrialDenied as denied:
+            return _denied(denied)
+        return JSONResponse(
+            {
+                "object": "list",
+                "data": [
+                    {
+                        "id": model,
+                        "object": "model",
+                        "owned_by": policy.config.model_routes[model].provider,
+                    }
+                    for model in claims.models
+                    if model in policy.config.model_routes
+                ],
+            }
+        )
+
     @router.post("/funded-trial/gateway/anthropic/v1/messages")
     async def messages(request: Request) -> Response:
+        return await _generate(request, chat=False)
+
+    @router.post("/funded-trial/gateway/openai/v1/chat/completions")
+    async def chat_completions(request: Request) -> Response:
+        return await _generate(request, chat=True)
+
+    async def _generate(request: Request, *, chat: bool) -> Response:
         store = policy.store
         try:
             claims = await _authorize(request)
             raw = await request.body()
-            body, model, max_tokens = _validate_messages_body(policy, claims, raw)
-            headers = _upstream_headers(request)
+            body, model, max_tokens = _validate_messages_body(policy, claims, raw, chat=chat)
+            if chat:
+                route = policy.config.model_routes[model]
+                provider = policy.config.chat_providers[route.provider]
+                headers = {
+                    "authorization": f"Bearer {policy.upstream_api_key(route.provider)}",
+                    "content-type": "application/json",
+                    "accept-encoding": "identity",
+                }
+                url = provider.base_url + "/chat/completions"
+                body["model"] = route.upstream_model
+                if route.upstream_provider:
+                    body["provider"] = {
+                        "only": [route.upstream_provider],
+                        "allow_fallbacks": False,
+                        "require_parameters": True,
+                    }
+                raw = json.dumps(body).encode()
+            else:
+                headers = _upstream_headers(request)
+                url = f"{policy.config.upstream_base_url}/v1/messages"
         except FundedTrialDenied as denied:
             return _denied(denied)
         except PermissionError as exc:
@@ -326,15 +472,20 @@ def create_funded_trial_router(
             )
         except FundedTrialDenied as denied:
             return _denied(denied)
-        url = f"{policy.config.upstream_base_url}/v1/messages"
         client = httpx.AsyncClient(transport=transport, timeout=httpx.Timeout(600, connect=30))
         try:
             upstream_request = client.build_request("POST", url, content=raw, headers=headers)
             upstream = await client.send(upstream_request, stream=True)
-        except httpx.HTTPError:
+        except asyncio.CancelledError:
             await client.aclose()
-            # Nothing reached the provider, so the hold is safe to return.
-            await asyncio.to_thread(store.release, charge.id)
+            await asyncio.shield(_settle(policy, charge, model, {}, complete=False))
+            raise
+        except httpx.HTTPError as exc:
+            await client.aclose()
+            if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)):
+                await asyncio.to_thread(store.release, charge.id)
+            else:
+                await _settle(policy, charge, model, {}, complete=False)
             return _anthropic_error(502, "api_error", "The model provider is unreachable.")
         if upstream.status_code >= 400:
             content = await upstream.aread()
@@ -349,18 +500,25 @@ def create_funded_trial_router(
             )
         if body.get("stream"):
             return StreamingResponse(
-                _relay_stream(policy, charge, model, upstream, client),
+                _relay_stream(policy, charge, model, upstream, client, chat=chat),
                 status_code=upstream.status_code,
                 media_type=upstream.headers.get("content-type", "text/event-stream"),
             )
         try:
             content = await upstream.aread()
+        except (httpx.HTTPError, asyncio.CancelledError):
+            await asyncio.shield(_settle(policy, charge, model, {}, complete=False))
+            raise
         finally:
             await upstream.aclose()
             await client.aclose()
         usage: dict[str, int] = {}
         try:
-            _merge_usage(usage, json.loads(content).get("usage"))
+            provider_usage = json.loads(content).get("usage")
+            if chat:
+                usage = _chat_usage(provider_usage)
+            else:
+                _merge_usage(usage, provider_usage)
         except (ValueError, AttributeError):
             usage = {}
         await _settle(policy, charge, model, usage, complete=bool(usage))
@@ -402,8 +560,10 @@ async def _relay_stream(
     model: str,
     upstream: httpx.Response,
     client: httpx.AsyncClient,
+    *,
+    chat: bool = False,
 ) -> AsyncIterator[bytes]:
-    parser = _StreamUsage()
+    parser = _StreamUsage(chat=chat)
     try:
         async for chunk in upstream.aiter_raw():
             parser.feed(chunk)

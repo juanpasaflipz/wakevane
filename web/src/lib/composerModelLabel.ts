@@ -101,3 +101,19 @@ export function formatModelEffortStatusLabel(
   const parts = [modelLabel, effortLabel].filter((p): p is string => p != null && p.length > 0);
   return parts.length > 0 ? parts.join(" ") : null;
 }
+
+/** Approved hosted rates, shown beside the model in every selection surface. */
+export function hostedModelDescription(
+  option: Pick<NativeModelOption, "providerLabel" | "pricing">,
+): string | undefined {
+  if (!option.pricing) return option.providerLabel;
+  const money = (value: number) => `$${Number(value.toFixed(4))}`;
+  const { input, output, cacheRead, cacheWrite } = option.pricing;
+  return [
+    option.providerLabel,
+    `${money(input)} input / ${money(output)} output per 1M tokens`,
+    `${money(cacheRead)} cache read / ${money(cacheWrite)} cache write`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}

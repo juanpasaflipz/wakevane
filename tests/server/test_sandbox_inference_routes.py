@@ -1048,3 +1048,102 @@ async def test_same_harness_fork_validates_model_against_saved_policy(
         assert fork is not None and original is not None
         assert fork.model_override == expected
         assert fork.inference_snapshot == original.inference_snapshot
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        None,
+        "stale",
+        "no_connection",
+        "private",
+        "ai_failure",
+        "ai_success",
+        "no_ai_key",
+        "unpriced",
+    ],
+)
+async def test_model_plan_uses_accessible_repo_and_catalog_without_launching(
+    env: _Env, monkeypatch: pytest.MonkeyPatch, failure
+):
+    snapshot = await env.catalog.prepare("agent_sandbox", "pi-native", "local")
+    for row in snapshot["catalog"]["models"]:
+        if failure != "unpriced":
+            row["pricing"] = {"input": 1, "output": 2}
+    env.app.state.inference_catalog = SimpleNamespace(prepare=AsyncMock(return_value=snapshot))
+    repo_client = AsyncMock()
+    repo_client.repository_request.side_effect = [
+        {"sha": "a" * 40},
+        {"tree": [{"type": "blob", "path": "tests/test_demo.py"}]},
+    ]
+    if failure == "private":
+        from omnigent.server.github_app_client import GitHubApiError
+
+        repo_client.repository_request.side_effect = GitHubApiError("secret upstream detail", 404)
+    env.app.state.github_client = repo_client
+    env.app.state.github_store = object()
+    token = AsyncMock(return_value=None if failure == "no_connection" else "synthetic-token")
+    monkeypatch.setattr(sandbox_inference_routes, "resolve_access_token", token)
+    analysis = (
+        AsyncMock(return_value={"risky": True, "broad": True})
+        if failure == "ai_success"
+        else AsyncMock(side_effect=ValueError("secret-provider-details"))
+    )
+    monkeypatch.setattr(sandbox_inference_routes, "assess_task", analysis)
+    monkeypatch.setenv("WAKEVANE_MODEL_PLANNER_TYPESAFE_KEY", "synthetic-key")
+    if failure == "no_ai_key":
+        monkeypatch.delenv("WAKEVANE_MODEL_PLANNER_TYPESAFE_KEY")
+    before = env.persisted()
+    response = await env.client.post(
+        "/v1/sandbox-providers/agent_sandbox/harnesses/pi-native/model-plan",
+        json={
+            "repository": "https://github.com/example/demo",
+            "prompt": "Change billing",
+            "configuration_revision": "stale" if failure == "stale" else "revision-1",
+            "analyze_with_ai": failure in {"ai_failure", "ai_success", "no_ai_key"},
+        },
+    )
+    assert env.persisted() == before
+    env.launch.assert_not_awaited()
+    assert "secret" not in response.text
+    if failure in {"stale", "no_connection"}:
+        assert response.status_code == 409, response.text
+        repo_client.repository_request.assert_not_awaited()
+    elif failure in {"private", "unpriced"}:
+        assert response.status_code == 422, response.text
+    else:
+        assert response.status_code == 200, response.text
+        assert response.headers["cache-control"] == "private, no-store"
+        plan = response.json()
+        assert plan["repository"]["commit"] == "a" * 40
+        assert plan["steps"][0]["model_id"] == "gateway/main"
+        assert plan["budget_enforced"] is False
+        assert plan["method"] == ("typesafe_assisted" if failure == "ai_success" else "rules")
+    if failure in {"ai_failure", "ai_success"}:
+        analysis.assert_awaited_once()
+        if failure == "ai_failure":
+            assert "AI task analysis was unavailable" in response.text
+    else:
+        analysis.assert_not_awaited()
+
+
+async def test_model_plan_reuses_agent_access_validation(env: _Env, monkeypatch):
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(
+        sandbox_inference_routes,
+        "validate_session_agent",
+        AsyncMock(side_effect=HTTPException(403, "Agent access denied")),
+    )
+    agent = await create_test_agent(env.client, include_llm=False)
+    response = await env.client.post(
+        "/v1/sandbox-providers/agent_sandbox/harnesses/pi-native/model-plan",
+        json={
+            "repository": "https://github.com/example/demo",
+            "prompt": "Fix a typo",
+            "configuration_revision": "revision-1",
+            "agent_id": agent["id"],
+        },
+    )
+    assert response.status_code == 403, response.text
+    assert env.catalog.calls == []

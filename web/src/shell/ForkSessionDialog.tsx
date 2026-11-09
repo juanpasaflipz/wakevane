@@ -1,3 +1,4 @@
+import { hostedModelDescription } from "@/lib/composerModelLabel";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "@/lib/routing";
 import { useQueryClient } from "@tanstack/react-query";
@@ -290,6 +291,7 @@ function ForkRunConfig({
   const modelOptions = useMemo(
     () =>
       (hostModelOptions ?? []).map((option) => ({
+        ...option,
         id: option.id,
         displayName: option.displayName ?? option.id,
         isDefault: option.isDefault,
@@ -297,7 +299,11 @@ function ForkRunConfig({
     [hostModelOptions],
   );
   const modelSelectOptions = useMemo(
-    () => modelOptions.map((m) => ({ id: m.id, label: nativeModelLabel(m) })),
+    () =>
+      modelOptions.map((m) => ({
+        id: m.id,
+        label: [nativeModelLabel(m), hostedModelDescription(m)].filter(Boolean).join(" · "),
+      })),
     [modelOptions],
   );
 

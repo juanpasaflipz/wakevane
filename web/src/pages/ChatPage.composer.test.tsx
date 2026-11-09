@@ -1467,6 +1467,31 @@ describe("Composer slash-command submit routing", () => {
     expect(screen.getByTestId("composer-agent-models")).toBeTruthy();
   });
 
+  it("shows hosted provider rates in the in-session Pi picker", async () => {
+    render(
+      <Composer
+        {...composerProps({
+          isTerminalFirst: true,
+          isNativeWrapper: true,
+          showModels: true,
+          modelPickerKind: "pi",
+          codexModelOptions: [
+            {
+              id: "qwen-test",
+              displayName: "Qwen test",
+              providerLabel: "Hosted test",
+              pricing: { input: 2, output: 4, cacheRead: 0.5, cacheWrite: 2 },
+            },
+          ],
+        })}
+      />,
+    );
+    fireEvent.change(textarea(), { target: { value: "/model " } });
+    fireEvent.keyDown(textarea(), { key: "Enter" });
+    const option = await screen.findByTestId("composer-agent-model-qwen-test");
+    expect(option).toHaveTextContent("Hosted test · $2 input / $4 output per 1M tokens");
+  });
+
   it("shows one merged tooltip on the pill, carrying the model connection", async () => {
     useChatStore.setState({ llmModel: "sonnet" });
     const options = CLAUDE_MODEL_OPTIONS.map((option) => ({

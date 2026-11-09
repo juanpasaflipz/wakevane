@@ -6,6 +6,7 @@ import {
   formatModelEffortStatusLabel,
   formatStatusEffortLabel,
   formatStatusModelLabel,
+  hostedModelDescription,
   nativeModelLabel,
   nativeModelTooltip,
   normalizeEffortLabel,
@@ -168,5 +169,18 @@ describe("effort labels", () => {
       displayName: "Team model",
     };
     expect(formatModelEffortStatusLabel(row.model, "xhigh", [row])).toBe("Team model xHigh");
+  });
+});
+
+describe("hosted model descriptions", () => {
+  it("shows the provider and all approved token rates", () => {
+    expect(
+      hostedModelDescription({
+        providerLabel: "Hosted test",
+        pricing: { input: 2, output: 4, cacheRead: 0.5, cacheWrite: 2 },
+      }),
+    ).toBe("Hosted test · $2 input / $4 output per 1M tokens · $0.5 cache read / $2 cache write");
+    expect(hostedModelDescription({})).toBeUndefined();
+    expect(hostedModelDescription({ providerLabel: "Hosted test" })).toBe("Hosted test");
   });
 });

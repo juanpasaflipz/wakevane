@@ -3553,7 +3553,12 @@ def create_app(
         from omnigent.server.billing_store import BillingStore
         from omnigent.server.billing_stripe import StripeSdkGateway
 
-        if not funded_trial_enabled or funded_trial_store is None or auth_provider is None:
+        if (
+            not funded_trial_enabled
+            or funded_trial_store is None
+            or permission_store is None
+            or auth_provider is None
+        ):
             raise RuntimeError(
                 "OMNIGENT_FEATURES=billing requires funded_trial, a database and "
                 "multi-user authentication"

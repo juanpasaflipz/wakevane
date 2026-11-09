@@ -5,8 +5,11 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
+import os
+import time
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from omnigent.entities import Conversation
@@ -17,9 +20,19 @@ from omnigent.inference_config import (
     parse_inference_config,
     resolve_bound_provider,
 )
-from omnigent.server.auth import AuthProvider
+from omnigent.server.auth import RESERVED_USER_LOCAL, AuthProvider
+from omnigent.server.github_app import GitHubAppError
+from omnigent.server.github_identity import resolve_access_token
 from omnigent.server.managed_hosts import NoReachableModels
+from omnigent.server.model_plans import (
+    ModelPlanRequest,
+    assess_task,
+    github_repository,
+    inspect_repository,
+    recommend_models,
+)
 from omnigent.server.routes._auth_helpers import require_user
+from omnigent.server.routes._oauth import SlidingWindowRateLimiter
 from omnigent.server.routes._session_create_validation import validate_session_agent
 
 _logger = logging.getLogger(__name__)
@@ -168,6 +181,8 @@ def create_sandbox_inference_router(
 ) -> APIRouter:
     """Expose authenticated previews without provisioning a host."""
     router = APIRouter()
+    plan_limit = SlidingWindowRateLimiter(10, 3600, 10000)
+    ai_limit = SlidingWindowRateLimiter(100, 3600, 1)
 
     @router.get("/sandbox-providers/{provider}/harnesses/{harness}/model-options")
     async def model_options(
@@ -275,5 +290,74 @@ def create_sandbox_inference_router(
                     error="Could not load AI Gateway models. You can use Default.",
                 )
         return result
+
+    @router.post("/sandbox-providers/{provider}/harnesses/{harness}/model-plan")
+    async def model_plan(
+        request: Request, response: Response, provider: str, harness: str, body: ModelPlanRequest
+    ) -> dict[str, Any]:
+        user_id = require_user(request, auth_provider) or RESERVED_USER_LOCAL
+        response.headers["Cache-Control"] = "private, no-store"
+        if harness != "pi-native":
+            raise HTTPException(400, "Model planning currently supports the Pi harness")
+        if not plan_limit.allow(user_id, time.time()):
+            raise HTTPException(429, "Model planning limit reached. Try again in an hour.")
+        try:
+            github_repository(body.repository)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        # Reuse the preview's agent access checks and user-scoped catalog resolution.
+        catalog = await model_options(request, response, provider, harness, body.agent_id)
+        if catalog.get("status") != "ready" or not catalog.get("configured"):
+            raise HTTPException(409, "A configured model catalog is required for planning")
+        if body.configuration_revision != catalog.get("configuration_revision"):
+            raise HTTPException(409, "Model configuration changed. Refresh the model choices.")
+        client = getattr(request.app.state, "github_client", None)
+        store = getattr(request.app.state, "github_store", None)
+        if client is None or store is None:
+            raise HTTPException(409, "Connect GitHub on a server with GitHub integration enabled")
+        token = await resolve_access_token(user_id, store=store, client=client)
+        if token is None:
+            raise HTTPException(409, "Connect your GitHub account before inspecting a repository")
+        try:
+            repository = await asyncio.wait_for(
+                inspect_repository(client, token, body.repository, body.branch), timeout=30
+            )
+        except (GitHubAppError, httpx.HTTPError, TimeoutError, ValueError) as exc:
+            raise HTTPException(
+                422, "Could not inspect this repository and branch. Check your GitHub access."
+            ) from exc
+        assessment = None
+        analysis_warning = None
+        if body.analyze_with_ai:
+            key = os.environ.get("WAKEVANE_MODEL_PLANNER_TYPESAFE_KEY")
+            if not key:
+                analysis_warning = (
+                    "AI task analysis is not configured; used planning rules instead."
+                )
+            elif not ai_limit.allow("planner", time.time()):
+                analysis_warning = "AI task analysis is at capacity; used planning rules instead."
+            else:
+                try:
+                    assessment = await asyncio.wait_for(
+                        assess_task(body.prompt, repository, key), timeout=12
+                    )
+                except (httpx.HTTPError, TimeoutError, ValueError, KeyError, TypeError):
+                    analysis_warning = (
+                        "AI task analysis was unavailable; used planning rules instead."
+                    )
+        billing = getattr(request.app.state, "billing", None)
+        try:
+            plan = recommend_models(
+                body,
+                repository,
+                catalog,
+                markup_percent=billing.config.markup_percent if billing else 0,
+                assessment=assessment,
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        if analysis_warning:
+            plan["warnings"].append(analysis_warning)
+        return plan
 
     return router

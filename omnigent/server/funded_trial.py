@@ -19,11 +19,14 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import os
+import re
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
+from urllib.parse import urlsplit
 
 from omnigent.llms.context_window import ModelPricing, compute_llm_cost
 from omnigent.server.funded_trial_store import (
@@ -39,6 +42,9 @@ CONFIG_ENV_VAR = "OMNIGENT_FUNDED_TRIAL_CONFIG"
 TRIAL_PROVIDER = "wakevane-trial"
 WELCOME_EVENT = "welcome_grant"
 TRIAL_HARNESSES = ("claude-sdk", "claude-native")
+CHAT_PROVIDER = "wakevane-chat"
+CHAT_GATEWAY_PATH = "/v1/funded-trial/gateway/openai/v1"
+CHAT_HARNESSES = ("pi-native",)
 GATEWAY_PATH = "/v1/funded-trial/gateway/anthropic"
 # Placeholder reference in catalogs and snapshots; launches replace it with a minted token.
 _TOKEN_REF = "env:WAKEVANE_TRIAL_GATEWAY_TOKEN"
@@ -110,6 +116,43 @@ class WelcomeGrant:
 
 
 @dataclass(frozen=True)
+class FundedChatProvider:
+    """An operator-owned Chat Completions endpoint and server-only credential."""
+
+    base_url: str
+    api_key_env: str
+    display_name: str
+
+    @classmethod
+    def from_mapping(cls, name: str, raw: Mapping[str, Any]) -> FundedChatProvider:
+        url = str(raw["base_url"]).rstrip("/")
+        parsed = urlsplit(url)
+        if (
+            parsed.scheme not in {"https", "http"}
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("Chat provider base_url must be an HTTP(S) URL without credentials")
+        env = str(raw["api_key_env"])
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", env):
+            raise ValueError("Chat provider api_key_env must name an environment variable")
+        return cls(url, env, str(raw.get("display_name", name)))
+
+
+@dataclass(frozen=True)
+class FundedModelRoute:
+    """Public model identity mapped to a fixed upstream model and provider."""
+
+    provider: str
+    upstream_model: str
+    display_name: str
+    upstream_provider: str | None = None
+
+
+@dataclass(frozen=True)
 class FundedTrialConfig:
     """Operator-approved prices and limits; absent entries are unpriced.
 
@@ -126,6 +169,8 @@ class FundedTrialConfig:
     """
 
     model_pricing: Mapping[str, ModelPricing] = field(default_factory=dict)
+    chat_providers: Mapping[str, FundedChatProvider] = field(default_factory=dict)
+    model_routes: Mapping[str, FundedModelRoute] = field(default_factory=dict)
     compute_usd_per_hour: Mapping[str, float] = field(default_factory=dict)
     max_output_tokens: int = 16_000
     max_request_bytes: int = 2_000_000
@@ -138,8 +183,35 @@ class FundedTrialConfig:
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> FundedTrialConfig:
         """Parse operator JSON; prices are USD per million tokens."""
+        providers = {
+            name: FundedChatProvider.from_mapping(name, value)
+            for name, value in (raw.get("chat_providers") or {}).items()
+        }
+        routes: dict[str, FundedModelRoute] = {}
         models: dict[str, ModelPricing] = {}
         for model, prices in (raw.get("models") or {}).items():
+            rates = [
+                float(prices[key]) for key in ("input", "output", "cache_read", "cache_write")
+            ]
+            if any(not math.isfinite(rate) or rate < 0 for rate in rates):
+                raise ValueError("Model prices must be finite and nonnegative")
+            provider = prices.get("provider")
+            if provider is not None:
+                if provider not in providers:
+                    raise ValueError(f"Model {model!r} selects an unknown chat provider")
+                upstream = prices.get("upstream_model", model)
+                if not isinstance(upstream, str) or not upstream.strip() or ":" in upstream:
+                    raise ValueError(
+                        "Upstream model must be a fixed model ID without routing suffixes"
+                    )
+                upstream_provider = prices.get("upstream_provider")
+                if upstream_provider is not None and (
+                    not isinstance(upstream_provider, str) or not upstream_provider.strip()
+                ):
+                    raise ValueError("upstream_provider must be a nonempty provider slug")
+                routes[str(model)] = FundedModelRoute(
+                    provider, upstream, str(prices.get("display_name", model)), upstream_provider
+                )
             input_price = float(prices["input"])
             models[str(model)] = ModelPricing(
                 input_per_token=input_price / 1_000_000,
@@ -156,6 +228,8 @@ class FundedTrialConfig:
         defaults = cls()
         return cls(
             model_pricing=models,
+            chat_providers=providers,
+            model_routes=routes,
             compute_usd_per_hour=compute,
             max_output_tokens=int(raw.get("max_output_tokens", defaults.max_output_tokens)),
             max_request_bytes=int(raw.get("max_request_bytes", defaults.max_request_bytes)),
@@ -197,7 +271,7 @@ class FundedTrialConfig:
         )
 
     def inference_cost_micros(self, model: str, usage: Mapping[str, Any]) -> int:
-        """Measured cost from provider-reported Anthropic usage."""
+        """Measured cost from provider usage normalized into additive token buckets."""
         return _usd_to_micros(compute_llm_cost(dict(usage), self.model_pricing[model]))
 
     def compute_hold_micros(self, provider: str, hours: float) -> int:
@@ -264,9 +338,14 @@ class FundedTrialPolicy:
             )
         return key.encode("utf-8")
 
-    def upstream_api_key(self) -> str:
+    def upstream_api_key(self, provider: str | None = None) -> str:
         """Service provider key for the gateway; never returned to clients."""
-        key = self._environ.get(self.config.upstream_api_key_env, "")
+        env = (
+            self.config.chat_providers[provider].api_key_env
+            if provider is not None
+            else self.config.upstream_api_key_env
+        )
+        key = self._environ.get(env, "")
         if not key:
             raise FundedTrialDenied(
                 "unconfigured", "The funded trial provider credential is not configured."
@@ -695,14 +774,17 @@ def admit_managed_launch(
     )
 
 
-def trial_inference_config(server_url: str, models: tuple[str, ...]) -> dict[str, Any]:
-    """Host config binding Claude harnesses to the metered gateway for priced models.
+def trial_inference_config(
+    server_url: str, models: tuple[str, ...], config: FundedTrialConfig | None = None
+) -> dict[str, Any]:
+    """Bind Claude and Pi to their metered protocols for explicitly priced models.
 
     Carries only a placeholder credential reference, so it is safe to show in
     model catalogs and to persist in session inference snapshots.
     """
-    allowlist = sorted(models)
-    return {
+    config = config or FundedTrialConfig()
+    allowlist = sorted(model for model in models if model not in config.model_routes)
+    result: dict[str, Any] = {
         "providers": {
             TRIAL_PROVIDER: {
                 "kind": "gateway",
@@ -720,9 +802,49 @@ def trial_inference_config(server_url: str, models: tuple[str, ...]) -> dict[str
                     "model_allowlist": allowlist,
                 }
                 for harness in TRIAL_HARNESSES
+                if allowlist
             }
         },
     }
+
+    chat_models = sorted(model for model in models if model in config.model_routes)
+    if chat_models:
+        result["providers"][CHAT_PROVIDER] = {
+            "kind": "gateway",
+            "display_name": "Hosted models",
+            "openai": {
+                "base_url": server_url.rstrip("/") + CHAT_GATEWAY_PATH,
+                "api_key_ref": _TOKEN_REF,
+                "wire_api": "chat",
+                "max_output_tokens": config.max_output_tokens,
+            },
+            "model_catalog": {
+                model: {
+                    "displayName": config.model_routes[model].display_name,
+                    "providerLabel": config.chat_providers[
+                        config.model_routes[model].provider
+                    ].display_name,
+                    "pricing": {
+                        "input": config.model_pricing[model].input_per_token * 1_000_000,
+                        "output": config.model_pricing[model].output_per_token * 1_000_000,
+                        "cacheRead": compute_llm_cost(
+                            {"cache_read_input_tokens": 1_000_000}, config.model_pricing[model]
+                        ),
+                        "cacheWrite": compute_llm_cost(
+                            {"cache_creation_input_tokens": 1_000_000}, config.model_pricing[model]
+                        ),
+                    },
+                }
+                for model in chat_models
+            },
+        }
+        for harness in CHAT_HARNESSES:
+            result["inference"]["harnesses"][harness] = {
+                "provider": CHAT_PROVIDER,
+                "default_model": chat_models[0],
+                "model_allowlist": chat_models,
+            }
+    return result
 
 
 def bind_trial_inference(deployment: Any, policy: FundedTrialPolicy) -> None:
@@ -739,7 +861,7 @@ def bind_trial_inference(deployment: Any, policy: FundedTrialPolicy) -> None:
             target,
             host_config={
                 **(target.host_config or {}),
-                **trial_inference_config(target.server_url, models),
+                **trial_inference_config(target.server_url, models, policy.config),
             },
         )
         if getattr(target, "funding", None) == "trial"

@@ -11595,6 +11595,114 @@ describe("managed sandbox inference models", () => {
     );
   });
 
+  it("shows hosted rates and submits the selected Pi model", async () => {
+    preview({
+      ...catalog,
+      models: [
+        { id: "qwen-test", displayName: "Qwen test", isDefault: true },
+        {
+          id: "deepseek-test",
+          displayName: "DeepSeek test",
+          providerLabel: "Hosted test",
+          pricing: { input: 2, output: 4, cacheRead: 0.5, cacheWrite: 2 },
+        },
+      ],
+    });
+    mockAgents([testAgent("a_pi", "pi-native-ui", { display_name: "Pi", harness: "pi-native" })]);
+    authenticatedFetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: "conv_new" }),
+    } as Response);
+    renderConfiguredSandbox({ managed_sandboxes_enabled: true, sandbox_provider: "agent_sandbox" });
+    openAgentModels("a_pi");
+    const option = screen.getByTestId("new-chat-landing-agent-model-deepseek-test");
+    expect(option).toHaveTextContent("Hosted test · $2 input / $4 output per 1M tokens");
+    fireEvent.click(option);
+    closeMenu();
+    const { body } = await submitAndReadBody();
+    expect(body.model_override).toBe("deepseek-test");
+    expect(body.inference_configuration_revision).toBe("profile-revision-1");
+  });
+
+  it("applies a repository model plan through the normal Pi launch selection", async () => {
+    preview();
+    mockAgents([testAgent("a_pi", "pi-native-ui", { display_name: "Pi", harness: "pi-native" })]);
+    localStorage.setItem(
+      "omnigent:last-sandbox-repos",
+      JSON.stringify([{ url: "https://github.com/example/demo", branch: "main" }]),
+    );
+    authenticatedFetchMock.mockImplementation(
+      async (url) =>
+        ({
+          ok: true,
+          json: async () =>
+            String(url).endsWith("/model-plan")
+              ? {
+                  method: "rules",
+                  complexity: "standard",
+                  configuration_revision: "profile-revision-1",
+                  repository: {
+                    name: "example/demo",
+                    commit: "a".repeat(40),
+                    files_sampled: 10,
+                    languages: ["Python"],
+                    partial: false,
+                    test_files_detected: true,
+                  },
+                  steps: [
+                    {
+                      role: "implement",
+                      model_id: "private/alternate",
+                      reason: "Configured choice",
+                      estimate: { low_usd: 0.1, high_usd: 0.4 },
+                    },
+                  ],
+                  candidates: [
+                    {
+                      id: "private/alternate",
+                      label: "Gateway alternate",
+                      estimate: { low_usd: 0.1, high_usd: 0.4 },
+                    },
+                  ],
+                  assumptions: {
+                    input_tokens_high: 30000,
+                    output_tokens_high: 5000,
+                    review_share: 0.35,
+                    markup_percent: 20,
+                  },
+                  warnings: [],
+                  escalation: "Review validation results.",
+                }
+              : { id: "conv_new" },
+        }) as Response,
+    );
+    renderConfiguredSandbox({ managed_sandboxes_enabled: true, sandbox_provider: "agent_sandbox" });
+    fireEvent.change(screen.getByTestId("new-chat-landing-input"), {
+      target: { value: "Fix a typo" },
+    });
+    fireEvent.click(await screen.findByText("Plan model usage"));
+    fireEvent.click(screen.getByRole("button", { name: "Recommend models" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Use implementation model" }));
+    expect(screen.getByText("Selected for launch")).toBeInTheDocument();
+    const planCall = authenticatedFetchMock.mock.calls.find(([url]) =>
+      String(url).endsWith("/model-plan"),
+    )!;
+    expect(JSON.parse((planCall[1] as RequestInit).body as string)).toMatchObject({
+      repository: "https://github.com/example/demo",
+      branch: "main",
+      prompt: "Fix a typo",
+      analyze_with_ai: false,
+      agent_id: "a_pi",
+    });
+    fireEvent.change(screen.getByTestId("new-chat-landing-input"), {
+      target: { value: "Fix a different typo" },
+    });
+    expect(screen.queryByText("Selected for launch")).toBeNull();
+    const { body } = await submitAndReadBody();
+    expect(body.model_override).toBe("private/alternate");
+    expect(body.inference_configuration_revision).toBe("profile-revision-1");
+  });
+
   it("supports an ACP agent without native model-picker capabilities", async () => {
     preview();
     mockAgents([

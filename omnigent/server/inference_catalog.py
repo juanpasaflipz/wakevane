@@ -417,6 +417,7 @@ class SandboxInferenceService:
         result: dict[str, Any],
         binding: HarnessInferenceBinding,
         provider: ProviderEntry,
+        metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Serve the operator's curated list when no server discovery is configured.
 
@@ -448,6 +449,11 @@ class SandboxInferenceService:
                     "displayName": model,
                     "isDefault": model == default,
                     "source": source,
+                    **{
+                        key: value
+                        for key, value in (metadata or {}).get(model, {}).items()
+                        if key in {"displayName", "providerLabel", "pricing"}
+                    },
                 }
                 for model in ids
             ],
@@ -481,7 +487,12 @@ class SandboxInferenceService:
             if not workspace and not isinstance(
                 snapshot.get("model_discovery", {}).get(provider.name), dict
             ):
-                return self._static_catalog(result, binding, provider)
+                return self._static_catalog(
+                    result,
+                    binding,
+                    provider,
+                    config["providers"][provider.name].get("model_catalog"),
+                )
             if workspace:
                 connection = await self._connection(snapshot["owner_id"])
                 if connection is None:

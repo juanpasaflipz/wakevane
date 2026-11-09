@@ -30,7 +30,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, NotRequired, TypeAlias, TypedDict, TypeGuard
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit
 
 from omnigent._platform import default_shell_argv
 from omnigent.databricks_ai_gateway import (
@@ -392,6 +392,20 @@ class PiProviderConfig:
         # thinking level controls.
         if self.api == "anthropic-messages":
             provider["compat"] = {"forceAdaptiveThinking": True}
+        if self.api == "openai-completions" and urlsplit(self.base_url).path.rstrip("/").endswith(
+            "/funded-trial/gateway/openai/v1"
+        ):
+            provider["compat"] = {
+                "supportsDeveloperRole": False,
+                "supportsStore": False,
+                "supportsStrictMode": False,
+                "supportsReasoningEffort": False,
+                "supportsUsageInStreaming": True,
+            }
+            # Preserve provider reasoning through tool turns; these routes are text-only.
+            provider["models"] = [
+                {**model, "input": ["text"], "reasoning": True} for model in models
+            ]
         providers = {self.provider_id: provider}
         providers.update(additional)
         for provider_id, payload in providers.items():

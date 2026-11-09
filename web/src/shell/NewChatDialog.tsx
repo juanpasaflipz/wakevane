@@ -28,8 +28,10 @@ import {
   PickerSectionHeader,
 } from "@/components/composer/HarnessMenuRow";
 import { ComposerConfigSections } from "@/components/composer/ComposerConfigSections";
+import { ModelPlanPanel } from "@/components/composer/ModelPlanPanel";
 import { buildFusionSections } from "@/components/composer/fusionSections";
 import {
+  hostedModelDescription,
   compactModelTriggerLabel,
   nativeModelTooltip,
   normalizeEffortLabel,
@@ -3401,6 +3403,7 @@ export function NewChatLandingScreen() {
       sandboxSelected
         ? (sandboxCatalog ?? [])
         : (availablePiModels ?? []).map((option) => ({
+            ...option,
             id: option.id,
             model: option.model,
             displayName: nativeModelLabel(option),
@@ -4048,6 +4051,7 @@ export function NewChatLandingScreen() {
                       .map((option) => ({
                         key: option.id,
                         label: visibleModelLabel(nativeModelLabel(option)),
+                        description: hostedModelDescription(option),
                         checked:
                           !routingOn &&
                           (option.fusion !== undefined
@@ -6750,6 +6754,31 @@ export function NewChatLandingScreen() {
                 )}
             </ComposerWorkspaceBar>
           )}
+          {sandboxSelected &&
+            previewHarness === "pi-native" &&
+            previewSandboxProvider &&
+            sandboxModels.data?.configured &&
+            sandboxModels.data.status === "ready" &&
+            sandboxModels.data.configuration_revision &&
+            sandboxRepoSelections.length === 1 && (
+              <ModelPlanPanel
+                key={JSON.stringify([
+                  previewSandboxProvider,
+                  effectiveAgentId,
+                  sandboxRepoSelections,
+                  message,
+                  sandboxModels.data.configuration_revision,
+                ])}
+                provider={previewSandboxProvider}
+                repository={sandboxRepoSelections[0].url}
+                branch={sandboxRepoSelections[0].branch}
+                prompt={message}
+                revision={sandboxModels.data.configuration_revision}
+                agentId={effectiveAgentId ?? undefined}
+                selectedModel={pickedModel}
+                onApply={selectPickerModel}
+              />
+            )}
           <form
             onSubmit={(e) => {
               e.preventDefault();

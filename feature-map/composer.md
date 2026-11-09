@@ -10,6 +10,9 @@ and steers messages while the agent is busy.
 
 ## Sub-features
 
+- `hosted-models`: funded Pi models show provider and approved token rates in the
+  new-session and in-session model pickers, with details in the fork dialog.
+
 - `prompt-link`: opening the new-session page with `?prompt=`
   fills an editable draft without starting a session. The consumed prompt is
   removed from the URL while other query parameters and the fragment remain.
@@ -489,6 +492,16 @@ Other connection providers alone do not enable the managed MCP picker.
 - **`mobile-labels`, new-session composer:**
   `tests/e2e_ui/mobile/test_composer_model_label_stop_overlap.py::test_new_session_composer_collapses_labels_to_icons_on_mobile`
 
+- **`hosted-models`, both composers and fork dialog:** component coverage is in
+  `web/src/components/composer/ComposerConfigSections.test.tsx` and
+  `web/src/lib/composerModelLabel.test.ts`; gateway/catalog coverage is in
+  `tests/server/test_funded_trial_routes.py`. No live browser/provider proof is
+  implied by these tests. On an isolated funded deployment configured per
+  [Hosted models](../docs/HOSTED_MODELS.md), choose Pi, choose a hosted model,
+  confirm provider and rates, send a coding task, reopen the session, switch
+  hosted models while idle, and inspect the fork model selector. Repeat both
+  composers on mobile. Verify selected IDs through the session REST API.
+
 ## Gotchas
 
 - The Arclet dbcert preflight needs both the updated desktop shell and web UI,
@@ -536,3 +549,29 @@ Other connection providers alone do not enable the managed MCP picker.
   server when available. A verification instance without a transcription engine
   depends on browser support; a missing microphone there does not prove that
   dictation is unavailable on a configured server.
+
+## Repository model plans
+
+Entry point: New Chat, managed Pi harness, one selected GitHub repository, and a
+ready configured model catalog. Open **Plan model usage** above the composer.
+This preview is unavailable for ordinary hosts, other harnesses, unconfigured
+catalogs, and multiple repositories.
+
+Connect GitHub, enter a task, select Economy/Balanced/Quality and a planning
+budget, then click **Recommend models**. Confirm the inspected commit, sampled
+languages, implementation choice, optional manual reviewer, and cost assumptions.
+Override a choice and check that the estimate changes. **Use implementation
+model** must update the ordinary model picker without sending the prompt; Send
+then creates the session with that model and the current catalog revision.
+Changing the prompt/repository/branch/agent/provider/catalog invalidates the plan.
+AI task analysis is optional and defaults off; missing server configuration must
+produce an explicit rules fallback, never a claim that AI analysis occurred.
+The planning budget is not a cap, and reviewer/escalation steps are manual.
+
+Coverage (component/server checks, not browser proof):
+- `web/src/components/composer/ModelPlanPanel.test.tsx`
+- `web/src/shell/NewChatDialog.test.tsx` (repository model plan to Pi launch)
+- `tests/server/test_model_plans.py`
+- `tests/server/test_sandbox_inference_routes.py` (model-plan endpoint)
+
+See [setup, limits, and manual verification](../docs/MODEL_PLANNING.md).

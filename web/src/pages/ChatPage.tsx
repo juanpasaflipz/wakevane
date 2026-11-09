@@ -244,6 +244,7 @@ import { ComposerContextRing } from "@/components/composer/ComposerContextRing";
 import { useComposerGitStatus } from "@/hooks/useComposerGitStatus";
 import { composerContextFromLabels } from "@/lib/composerContextAdapters";
 import {
+  hostedModelDescription,
   compactModelTriggerLabel,
   formatStatusModelLabel,
   formatStatusEffortLabel,
@@ -4829,6 +4830,7 @@ function SessionHarnessPicker({
                   ...modelOptions.map((model) => ({
                     key: model.id,
                     label: nativeModelLabel(model),
+                    description: hostedModelDescription(model),
                     checked:
                       !routingOn &&
                       (composerFusion !== undefined && model.id === composerFusionOption?.id
@@ -5041,13 +5043,9 @@ function useResolvedComposerModel(
     modelPickerKind === "devin" ||
     modelPickerKind === "acp" ||
     modelPickerKind === "configured";
-  const modelOptions: readonly {
-    id: string;
-    model?: string;
-    label?: string;
-    displayName?: string;
-    isDefault?: boolean;
-  }[] = usesServerModelOptions ? codexModelOptions : [];
+  const modelOptions: readonly NativeModelOption[] = usesServerModelOptions
+    ? codexModelOptions
+    : [];
   const isNativeModelPicker = modelPickerKind !== null;
 
   // The harness's own report is the display authority for claude-/codex-
