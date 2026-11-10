@@ -17,7 +17,11 @@ repos:
         name: ruff format
         language: system
         entry: .venv/bin/python -m ruff format --force-exclude
-        types: [python]
+        # `types: [python]` alone never matched Markdown, so a fenced ```python
+        # block in the docs could drift from ruff's style unnoticed (issue #7)
+        # even though `ruff format --check .` (run directly, not through
+        # pre-commit) covers Markdown fine. Check both.
+        types_or: [python, markdown]
 
       - id: pyrefly
         name: pyrefly
