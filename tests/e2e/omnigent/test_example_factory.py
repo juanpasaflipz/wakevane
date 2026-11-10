@@ -65,8 +65,14 @@ def test_factory_effort_mix(factory_spec: AgentSpec) -> None:
 def test_factory_foreman_asks_before_pushing(factory_spec: AgentSpec) -> None:
     paths = _policy_paths(factory_spec)
     assert paths["blast_radius"].endswith("orchestration.blast_radius")
-    assert _policy_args(factory_spec, "blast_radius") == {"gate_pushes": True}
+    # Sub-agents run under the foreman's policies too; the fixer is exempt from
+    # the push gate (pushing its branch is its job) and from the write deny.
+    assert _policy_args(factory_spec, "blast_radius") == {
+        "gate_pushes": True,
+        "ungated_sub_agents": ["fixer"],
+    }
     assert paths["read_only_os"].endswith("orchestration.read_only_os")
+    assert _policy_args(factory_spec, "read_only_os") == {"allow_sub_agents": ["fixer"]}
     assert _policy_args(factory_spec, "purpose_guard") == {
         "allowed_purposes": ["explore", "implement", "review"]
     }
@@ -102,4 +108,11 @@ def test_factory_sandboxed_by_default(factory_spec: AgentSpec) -> None:
     for spec in (factory_spec, *factory_spec.sub_agents):
         assert spec.os_env is not None, spec.name
         assert spec.os_env.type == "caller_process", spec.name
-        assert spec.os_env.sandbox is None, spec.name
+        if spec.name != "fixer":
+            assert spec.os_env.sandbox is None, spec.name
+    # The fixer gets an explicit sandbox with a writable workspace so a clone
+    # made there persists across shell calls.
+    fixer = next(a for a in factory_spec.sub_agents if a.name == "fixer")
+    assert fixer.os_env is not None
+    assert fixer.os_env.sandbox is not None
+    assert fixer.os_env.sandbox.write_paths == ["."]
