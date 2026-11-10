@@ -18,6 +18,9 @@ FRAME_ANCESTORS_ENV = "OMNIGENT_FRAME_ANCESTORS"
 _HSTS_VALUE = "max-age=31536000"
 # One CSP source list: keywords, schemes and hosts, no directive separators.
 _SOURCE_LIST_RE = re.compile(r"^[A-Za-z0-9'*:/.\-\[\] ]+$")
+# Some hosts (Railway's variable editor) cannot store single quotes, so a bare
+# keyword is read as the quoted one. Unquoted, a browser would take it as a host.
+_BARE_KEYWORDS = {"self": "'self'", "none": "'none'"}
 
 
 def build_security_headers(
@@ -39,7 +42,10 @@ def build_security_headers(
     }
     if https:
         headers["Strict-Transport-Security"] = _HSTS_VALUE
-    frame_ancestors = env.get(FRAME_ANCESTORS_ENV, "").strip()
+    frame_ancestors = " ".join(
+        _BARE_KEYWORDS.get(source.lower(), source)
+        for source in env.get(FRAME_ANCESTORS_ENV, "").split()
+    )
     if frame_ancestors:
         if not _SOURCE_LIST_RE.fullmatch(frame_ancestors):
             raise ValueError(

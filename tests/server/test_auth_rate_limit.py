@@ -98,6 +98,16 @@ def test_security_headers_follow_scheme_and_frame_setting() -> None:
     assert "X-Frame-Options" not in listed
 
 
+def test_security_headers_quote_bare_keywords() -> None:
+    bare = build_security_headers(https=True, environ={"OMNIGENT_FRAME_ANCESTORS": "self"})
+    assert bare["Content-Security-Policy"] == "frame-ancestors 'self'"
+    assert bare["X-Frame-Options"] == "SAMEORIGIN"
+
+    denied = build_security_headers(https=True, environ={"OMNIGENT_FRAME_ANCESTORS": "None"})
+    assert denied["Content-Security-Policy"] == "frame-ancestors 'none'"
+    assert denied["X-Frame-Options"] == "DENY"
+
+
 def test_security_headers_reject_directive_injection() -> None:
     with pytest.raises(ValueError, match="OMNIGENT_FRAME_ANCESTORS"):
         build_security_headers(

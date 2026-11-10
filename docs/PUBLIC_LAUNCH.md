@@ -72,7 +72,9 @@ OMNIGENT_FRAME_ANCESTORS='self'
 to send `Content-Security-Policy: frame-ancestors 'self'` and
 `X-Frame-Options: SAMEORIGIN`, which stops other sites from wrapping the app
 in a frame to capture clicks. The value is any CSP source list, for example
-`'self' https://ide.example.com`.
+`'self' https://ide.example.com`. Where the variable editor drops single
+quotes, as Railway's dashboard does, the bare keyword `self` (or `none`) is
+read as the quoted one.
 
 ## Before opening signup
 
