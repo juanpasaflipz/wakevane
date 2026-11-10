@@ -38,13 +38,31 @@ from pydantic import BaseModel, Field
 from starlette.responses import JSONResponse, RedirectResponse, Response
 
 from omnigent.db.account_authority import bind_account_authority, target_account_scope
+from omnigent.errors import OmnigentError
 from omnigent.server.accounts_store import SqlAlchemyAccountStore
 from omnigent.server.admin_list import AdminList, promote_if_listed
 from omnigent.server.auth import _RESERVED_USERS, RESERVED_USER_LOCAL, UnifiedAuthProvider
+from omnigent.server.auth_rate_limit import (
+    LOGIN_FAILURES_PER_ACCOUNT,
+    LOGIN_FAILURES_PER_ADDRESS,
+    LOGIN_FAILURES_PER_ADDRESS_AND_ACCOUNT,
+    REGISTRATIONS_PER_ADDRESS,
+    RESET_REDEMPTIONS_PER_ADDRESS,
+    RESET_REQUESTS_PER_ACCOUNT,
+    RESET_REQUESTS_PER_ADDRESS,
+    AttemptLimiter,
+    client_address,
+    rate_limiting_enabled,
+)
 from omnigent.server.funded_trial import FundedTrialPolicy
 from omnigent.server.funded_trial_store import MICROS_PER_USD
 from omnigent.server.mailer import SmtpMailer
 from omnigent.server.oidc import mint_session_cookie
+from omnigent.server.password_reset import (
+    RESET_TOKEN_TTL_SECONDS,
+    mint_reset_token,
+    read_reset_token,
+)
 from omnigent.server.passwords import (
     InvalidPasswordError,
     hash_password,
@@ -137,6 +155,27 @@ class InviteRequest(BaseModel):
     is_admin: bool = False
 
 
+class ForgotPasswordRequest(BaseModel):
+    """Body of ``POST /auth/password/forgot``.
+
+    :param identifier: The account's username or its contact address,
+        e.g. ``"ana"`` or ``"ana@example.com"``.
+    """
+
+    identifier: str = Field(min_length=1, max_length=254)
+
+
+class ResetPasswordRequest(BaseModel):
+    """Body of ``POST /auth/password/reset``.
+
+    :param token: The token from the emailed reset link.
+    :param new_password: Replacement password.
+    """
+
+    token: str = Field(min_length=1, max_length=2048)
+    new_password: str = Field(min_length=_MIN_PASSWORD_LENGTH, max_length=1024)
+
+
 class ChangePasswordRequest(BaseModel):
     """Body of ``POST /auth/users/me/password``.
 
@@ -220,11 +259,7 @@ def _registration_source(request: Request, secret: bytes) -> str | None:
     public deployment) and falls back to the socket peer. Only a keyed hash
     is stored, never the address itself.
     """
-    address = (
-        request.headers.get("cf-connecting-ip")
-        or (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
-        or (request.client.host if request.client else "")
-    )
+    address = client_address(request)
     if not address:
         return None
     return hashlib.sha256(secret + b":" + address.encode()).hexdigest()[:32]
@@ -299,6 +334,14 @@ def create_accounts_auth_router(
     _secure = config.secure_cookies
     _session_cookie = config.session_cookie_name
     _session_max_age = config.session_ttl_hours * 3600
+    limiter = AttemptLimiter(enabled=rate_limiting_enabled())
+
+    def _too_many_attempts(retry_after_seconds: int) -> JSONResponse:
+        return JSONResponse(
+            status_code=429,
+            content={"error": "too many attempts, try again later"},
+            headers={"Retry-After": str(retry_after_seconds)},
+        )
 
     def _reissue_session_cookie(response: Response, user_id: str, generation: str) -> None:
         """Keep the caller signed in after rotating their own account generation."""
@@ -321,7 +364,7 @@ def create_accounts_auth_router(
     # ── Login / logout / me ───────────────────────────────────────
 
     @router.post("/login")
-    async def login(body: LoginRequest) -> Response:
+    async def login(request: Request, body: LoginRequest) -> Response:
         """Verify password and mint a session cookie.
 
         Returns 401 on any failure (unknown user, wrong password,
@@ -333,6 +376,22 @@ def create_accounts_auth_router(
         OWASP authentication cheat-sheet guidance.
         """
         username = body.username.strip().lower()
+        address = client_address(request)
+        failure_keys = (
+            (f"login:pair:{address}:{username}", LOGIN_FAILURES_PER_ADDRESS_AND_ACCOUNT),
+            (f"login:address:{address}", LOGIN_FAILURES_PER_ADDRESS),
+            (f"login:account:{username}", LOGIN_FAILURES_PER_ACCOUNT),
+        )
+        # Checked before any hashing so a blocked caller costs no argon2 work.
+        retry_after = max(limiter.retry_after(key, limit) for key, limit in failure_keys)
+        if retry_after:
+            _logger.warning("auth/login: rate limited %s", _redact_for_log(username))
+            return _too_many_attempts(retry_after)
+
+        def _record_failure() -> None:
+            for key, limit in failure_keys:
+                limiter.record(key, limit)
+
         password_hash, generation = account_store.login_snapshot(username)
         if generation is not None:
             bind_account_authority(username, generation)
@@ -345,12 +404,14 @@ def create_accounts_auth_router(
             with contextlib.suppress(InvalidPasswordError):
                 verify_password(body.password, _DUMMY_HASH)
             _logger.info("auth/login: unknown user %s", _redact_for_log(username))
+            _record_failure()
             return JSONResponse(status_code=401, content={"error": "invalid username or password"})
 
         try:
             verify_password(body.password, password_hash)
         except InvalidPasswordError:
             _logger.info("auth/login: bad password for %s", _redact_for_log(username))
+            _record_failure()
             return JSONResponse(status_code=401, content={"error": "invalid username or password"})
 
         # Opportunistic rehash if argon2 parameters were upgraded.
@@ -419,6 +480,9 @@ def create_accounts_auth_router(
             secure=_secure,
             max_age_seconds=_session_max_age,
         )
+        # A correct password clears this caller's strikes against the account;
+        # the cross-account and cross-address counters keep running.
+        limiter.reset(failure_keys[0][0])
         _logger.info("auth/login: success for %s", _redact_for_log(username))
         return resp
 
@@ -518,6 +582,11 @@ def create_accounts_auth_router(
         if email_err is not None:
             return JSONResponse(status_code=400, content={"error": email_err})
         open_signup = body.invite is None
+        signup_key = f"register:address:{client_address(request)}"
+        if open_signup:
+            retry_after = limiter.retry_after(signup_key, REGISTRATIONS_PER_ADDRESS)
+            if retry_after:
+                return _too_many_attempts(retry_after)
         if open_signup and mailer is not None and email is None:
             return JSONResponse(status_code=400, content={"error": "email is required"})
         if open_signup and email_key is not None and blocked_domain(email_key):
@@ -558,6 +627,8 @@ def create_accounts_auth_router(
             # Genuine race against another registrant using the same
             # invite — invite is now consumed, no recovery here.
             return JSONResponse(status_code=409, content={"error": "username already taken"})
+        if open_signup:
+            limiter.record(signup_key, REGISTRATIONS_PER_ADDRESS)
 
         welcome = None
         verification_sent: bool | None = None
@@ -740,6 +811,111 @@ def create_accounts_auth_router(
         if not sent:
             return JSONResponse(status_code=502, content={"error": "could not send the email"})
         return JSONResponse(status_code=200, content={"sent": True, "email": user.email})
+
+    # ── Self-serve password reset (needs a mailer) ────────────────
+
+    def _send_reset(user_id: str, email: str, generation: str) -> None:
+        """Mail a reset link; failures are logged, never surfaced to the caller."""
+        assert mailer is not None
+        token = mint_reset_token(
+            user_id=user_id, account_generation=generation, cookie_secret=config.cookie_secret
+        )
+        link = f"{config.base_url}/reset-password?t={token}"
+        text = (
+            f"Hi {user_id},\n\n"
+            "Someone asked to reset the password for this account. To choose a"
+            " new one, open:\n\n"
+            f"{link}\n\n"
+            f"The link works once and expires in {RESET_TOKEN_TTL_SECONDS // 60} minutes."
+            " If you did not ask for this, ignore this message; your password"
+            " stays as it is.\n"
+        )
+        try:
+            mailer.send(to=email, subject="Reset your password", text=text)
+        except Exception:
+            _logger.exception(
+                "auth/password/forgot: could not send to %s", _redact_for_log(user_id)
+            )
+
+    @router.post("/password/forgot")
+    async def forgot_password(request: Request, body: ForgotPasswordRequest) -> Response:
+        """Mail a reset link to the account behind a username or address.
+
+        Answers the same 200 whether or not an account matched, so the route
+        cannot be used to learn which usernames or addresses are registered.
+        """
+        if mailer is None:
+            return JSONResponse(status_code=503, content={"error": "email is not configured"})
+        address_key = f"reset:address:{client_address(request)}"
+        retry_after = limiter.retry_after(address_key, RESET_REQUESTS_PER_ADDRESS)
+        if retry_after:
+            return _too_many_attempts(retry_after)
+        limiter.record(address_key, RESET_REQUESTS_PER_ADDRESS)
+
+        identifier = body.identifier.strip().lower()
+        accounts = []
+        by_name = account_store.get_user(identifier) if identifier else None
+        if by_name is not None:
+            accounts.append(by_name)
+        email, _, email_error = normalize_email(identifier)
+        if email is not None and email_error is None:
+            known = {account.id for account in accounts}
+            accounts.extend(
+                account
+                for account in account_store.find_users_by_email(email)
+                if account.id not in known
+            )
+        for account in accounts:
+            if not account.email or account.account_generation is None:
+                continue
+            if account_store.get_password_hash(account.id) is None:
+                continue
+            account_key = f"reset:account:{account.id}"
+            if limiter.retry_after(account_key, RESET_REQUESTS_PER_ACCOUNT):
+                continue
+            limiter.record(account_key, RESET_REQUESTS_PER_ACCOUNT)
+            await asyncio.to_thread(
+                _send_reset, account.id, account.email, account.account_generation
+            )
+        _logger.info("auth/password/forgot: %d message(s) queued", len(accounts))
+        return JSONResponse(status_code=200, content={"sent": True})
+
+    @router.post("/password/reset")
+    async def reset_password(request: Request, body: ResetPasswordRequest) -> Response:
+        """Set a new password from an emailed reset link.
+
+        Signs the account out everywhere, which also retires the link and any
+        other reset link issued before it. The user signs in afterwards.
+        """
+        address_key = f"reset-redeem:address:{client_address(request)}"
+        retry_after = limiter.retry_after(address_key, RESET_REDEMPTIONS_PER_ADDRESS)
+        if retry_after:
+            return _too_many_attempts(retry_after)
+        limiter.record(address_key, RESET_REDEMPTIONS_PER_ADDRESS)
+
+        invalid = JSONResponse(status_code=400, content={"error": "reset link invalid or expired"})
+        claims = read_reset_token(body.token, cookie_secret=config.cookie_secret)
+        if claims is None:
+            return invalid
+        user_id, token_generation = claims
+        user = account_store.get_user(user_id)
+        if user is None or user.account_generation != token_generation:
+            return invalid
+        if account_store.get_password_hash(user_id) is None:
+            return invalid
+        try:
+            with target_account_scope(user_id, user.account_generation):
+                account_store.update_password(
+                    user_id, hash_password(body.new_password), revoke_sessions=True
+                )
+        except OmnigentError:
+            # The generation moved between the check and the write: another
+            # request already used this link.
+            return invalid
+        auth_provider.revoke_user_sessions(user_id)
+        limiter.reset(f"login:account:{user_id}")
+        _logger.info("auth/password/reset: password reset for %s", _redact_for_log(user_id))
+        return JSONResponse(status_code=200, content={"reset": True, "username": user_id})
 
     @router.post("/setup")
     async def setup(body: SetupRequest) -> Response:

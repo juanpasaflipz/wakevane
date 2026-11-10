@@ -34,6 +34,7 @@ import { AuthCardShell } from "@/pages/onboarding/AuthCardShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { getMe, login as loginRequest } from "@/lib/accountsApi";
+import { useServerInfo } from "@/lib/CapabilitiesContext";
 
 const DEFAULT_RETURN_TO = "/";
 const LAST_USERNAME_KEY = "omnigent.lastLoginUsername";
@@ -58,6 +59,11 @@ function rememberUsername(value: string): void {
 export function LoginPage() {
   const appName = useAppName();
   const loginV2 = useLoginV2();
+  const info = useServerInfo();
+  // A public deployment's visitors are subscribers, not the operator: offer
+  // sign-up and reset links and drop the self-host setup hints.
+  const openSignup = info !== "loading" && info.open_signup === true;
+  const passwordReset = info !== "loading" && info.password_reset === true;
   const [params] = useSearchParams();
   // `return_to` is set by both identity.ts (on 401 redirect) and the
   // server-side magic-redeem 302 fallback. Trust only same-origin
@@ -161,16 +167,28 @@ export function LoginPage() {
             disabled={submitting}
             required
           />
-          <p className="text-sm text-muted-foreground">
-            On a fresh install your username is your machine login (the output of{" "}
-            <code className="font-mono">whoami</code>), unless an admin set a different one.
-          </p>
+          {!openSignup && (
+            <p className="text-sm text-muted-foreground">
+              On a fresh install your username is your machine login (the output of{" "}
+              <code className="font-mono">whoami</code>), unless an admin set a different one.
+            </p>
+          )}
         </div>
 
         <div className="space-y-1.5">
-          <label htmlFor="login-password" className="text-ui font-medium leading-none">
-            Password
-          </label>
+          <div className="flex items-baseline justify-between">
+            <label htmlFor="login-password" className="text-ui font-medium leading-none">
+              Password
+            </label>
+            {passwordReset && (
+              <a
+                className="text-sm text-muted-foreground underline underline-offset-4"
+                href={withBasePath("/forgot-password")}
+              >
+                Forgot password?
+              </a>
+            )}
+          </div>
           <Input
             id="login-password"
             type="password"
@@ -201,15 +219,24 @@ export function LoginPage() {
         </Button>
       </form>
 
-      <p className="text-center text-sm text-muted-foreground">
-        On a fresh install you set the first admin's password yourself — no credential is
-        auto-generated. A brand-new instance shows a Create-admin form instead of this one; the
-        password can also be pre-seeded with{" "}
-        <code className="rounded bg-muted px-1 py-0.5 font-mono">
-          OMNIGENT_ACCOUNTS_INIT_ADMIN_PASSWORD
-        </code>
-        .
-      </p>
+      {openSignup ? (
+        <p className="text-center text-sm text-muted-foreground">
+          New here?{" "}
+          <a className="underline underline-offset-4" href={withBasePath("/register")}>
+            Create an account
+          </a>
+        </p>
+      ) : (
+        <p className="text-center text-sm text-muted-foreground">
+          On a fresh install you set the first admin's password yourself — no credential is
+          auto-generated. A brand-new instance shows a Create-admin form instead of this one; the
+          password can also be pre-seeded with{" "}
+          <code className="rounded bg-muted px-1 py-0.5 font-mono">
+            OMNIGENT_ACCOUNTS_INIT_ADMIN_PASSWORD
+          </code>
+          .
+        </p>
+      )}
     </>
   );
 

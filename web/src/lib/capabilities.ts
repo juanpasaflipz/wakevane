@@ -107,6 +107,14 @@ export interface ServerInfo {
    */
   open_signup?: boolean;
   /**
+   * True when the server can mail a self-serve password reset link, so the
+   * sign-in page offers "Forgot password?". Absent means off.
+   */
+  password_reset?: boolean;
+  /** Operator-supplied policy links shown on the sign-up page; null when unset. */
+  terms_url?: string | null;
+  privacy_url?: string | null;
+  /**
    * True on Databricks/internal deployments (the server's internal lakebox
    * CLI is present). Gates Databricks-only UI hints — the "Databricks Lakebox"
    * connect tab in the CLI command snippets. False
@@ -310,6 +318,9 @@ export const FALLBACK_SERVER_INFO: ServerInfo = {
   login_url: null,
   needs_setup: false,
   open_signup: false,
+  password_reset: false,
+  terms_url: null,
+  privacy_url: null,
   databricks_features: false,
   managed_sandboxes_enabled: false,
   sandbox_provider: null,
@@ -405,6 +416,9 @@ export async function resolveServerInfo(): Promise<ServerInfo> {
           login_url: typeof data.login_url === "string" ? data.login_url : null,
           needs_setup: data.needs_setup === true,
           open_signup: data.open_signup === true,
+          password_reset: data.password_reset === true,
+          terms_url: typeof data.terms_url === "string" ? data.terms_url : null,
+          privacy_url: typeof data.privacy_url === "string" ? data.privacy_url : null,
           databricks_features: data.databricks_features === true,
           managed_sandboxes_enabled: data.managed_sandboxes_enabled === true,
           durable_initial_input: data.durable_initial_input === true,

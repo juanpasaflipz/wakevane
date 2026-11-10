@@ -377,7 +377,13 @@ function isOnLoginPath(): boolean {
   // login/register pages when served under a subpath proxy (e.g.
   // `/proxy/6767/login`).
   const path = stripBasePath(window.location.pathname);
-  return path === "/login" || path === "/register" || path.startsWith("/auth/login");
+  return (
+    path === "/login" ||
+    path === "/register" ||
+    path === "/forgot-password" ||
+    path === "/reset-password" ||
+    path.startsWith("/auth/login")
+  );
 }
 
 /**

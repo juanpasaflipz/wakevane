@@ -11,6 +11,8 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RegisterPage } from "./RegisterPage";
 import * as accountsApi from "@/lib/accountsApi";
+import { CapabilitiesProvider } from "@/lib/CapabilitiesContext";
+import { FALLBACK_SERVER_INFO } from "@/lib/capabilities";
 
 vi.mock("@/lib/accountsApi", () => ({ register: vi.fn() }));
 
@@ -178,5 +180,36 @@ describe("RegisterPage v2 (?login-v2=1) flow", () => {
     renderRegisterAt("?login-v2=1");
     expect(screen.queryByRole("button", { name: /accept invitation/i })).not.toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent(/invite token/i);
+  });
+});
+
+describe("RegisterPage policy links", () => {
+  it("shows the operator's terms and privacy links on open signup", () => {
+    const serverInfo = {
+      ...FALLBACK_SERVER_INFO,
+      accounts_enabled: true,
+      open_signup: true,
+      terms_url: "https://example.com/terms",
+      privacy_url: "https://example.com/privacy",
+    };
+    render(
+      <CapabilitiesProvider info={serverInfo}>
+        <MemoryRouter initialEntries={["/register"]}>
+          <RegisterPage />
+        </MemoryRouter>
+      </CapabilitiesProvider>,
+    );
+    expect(screen.getByRole("link", { name: /terms of service/i }).getAttribute("href")).toBe(
+      "https://example.com/terms",
+    );
+    expect(screen.getByRole("link", { name: /privacy policy/i }).getAttribute("href")).toBe(
+      "https://example.com/privacy",
+    );
+    expect(screen.getByRole("link", { name: /^sign in$/i }).getAttribute("href")).toBe("/login");
+  });
+
+  it("shows no agreement line when no policy links are configured", () => {
+    renderRegisterAt("?invite=abc");
+    expect(screen.queryByText(/by creating an account/i)).toBeNull();
   });
 });
