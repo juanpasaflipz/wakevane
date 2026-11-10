@@ -40,6 +40,14 @@ const RegisterPage = withPageView(
   "register",
   lazy(() => import("@/pages/RegisterPage").then((m) => ({ default: m.RegisterPage }))),
 );
+const ForgotPasswordPage = withPageView(
+  "forgot_password",
+  lazy(() => import("@/pages/ForgotPasswordPage").then((m) => ({ default: m.ForgotPasswordPage }))),
+);
+const ResetPasswordPage = withPageView(
+  "reset_password",
+  lazy(() => import("@/pages/ResetPasswordPage").then((m) => ({ default: m.ResetPasswordPage }))),
+);
 const SetupPage = withPageView(
   "setup",
   lazy(() => import("@/pages/SetupPage").then((m) => ({ default: m.SetupPage }))),
@@ -171,6 +179,8 @@ function AppRoutes({ basename }: AppProps) {
           <>
             <Route path={`${prefix}/login`} element={<LoginPage />} />
             <Route path={`${prefix}/register`} element={<RegisterPage />} />
+            <Route path={`${prefix}/forgot-password`} element={<ForgotPasswordPage />} />
+            <Route path={`${prefix}/reset-password`} element={<ResetPasswordPage />} />
           </>
         )}
         <Route path={`${prefix}/approve/:sessionId/:elicitationId`} element={<ApprovePage />} />

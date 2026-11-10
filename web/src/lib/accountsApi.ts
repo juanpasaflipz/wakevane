@@ -219,6 +219,62 @@ export async function register(body: RegisterRequest): Promise<LoginResult> {
   return { ok: false, error: message, status: res.status };
 }
 
+/** Result of a reset-link request or redemption. */
+export type PasswordResetResult = { ok: true } | { ok: false; error: string };
+
+async function postPasswordReset(
+  path: string,
+  body: Record<string, string>,
+  fallbackMessage: string,
+): Promise<PasswordResetResult> {
+  let res: Response;
+  try {
+    res = await fetch(withBasePath(path), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    return { ok: false, error: "Could not reach the server." };
+  }
+  if (res.ok) return { ok: true };
+  if (res.status === 429) {
+    return { ok: false, error: "Too many attempts. Wait a while and try again." };
+  }
+  if (res.status >= 500 && res.status !== 503) {
+    return { ok: false, error: "Server error. Try again in a moment." };
+  }
+  let message = fallbackMessage;
+  try {
+    const data = (await res.json()) as { error?: unknown };
+    if (typeof data.error === "string" && data.error !== "") message = data.error;
+  } catch {
+    // Body wasn't JSON; keep the fallback.
+  }
+  return { ok: false, error: message };
+}
+
+/**
+ * POST /auth/password/forgot — ask for a reset link by username or email.
+ * The server answers the same way whether or not an account matched.
+ */
+export function requestPasswordReset(identifier: string): Promise<PasswordResetResult> {
+  return postPasswordReset(
+    "/auth/password/forgot",
+    { identifier },
+    "Could not send the reset link.",
+  );
+}
+
+/** POST /auth/password/reset — set a new password from an emailed link. */
+export function resetPassword(token: string, newPassword: string): Promise<PasswordResetResult> {
+  return postPasswordReset(
+    "/auth/password/reset",
+    { token, new_password: newPassword },
+    "Could not reset the password.",
+  );
+}
+
 /** Body of POST /auth/users/me/password (self-serve password change). */
 export interface ChangePasswordRequest {
   old_password: string;

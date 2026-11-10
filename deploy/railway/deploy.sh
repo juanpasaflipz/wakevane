@@ -49,7 +49,8 @@ railway add --service "$service" \
   --variables "OMNIGENT_ACCOUNTS_AUTO_OPEN=0" \
   --variables "OMNIGENT_DATA_DIR=/data/omnigent" \
   --variables "OMNIGENT_ADMIN_CREDENTIALS_PATH=/data/admin-credentials" \
-  --variables "ARTIFACT_DIR=/data/artifacts" >/dev/null
+  --variables "ARTIFACT_DIR=/data/artifacts" \
+  --variables "OMNIGENT_FRAME_ANCESTORS='self'" >/dev/null
 
 railway service link "$service" >/dev/null
 

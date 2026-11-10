@@ -25,6 +25,7 @@ the `omnigent` and `omni` commands still work, and settings keep their
 | Harness bench | A cost-per-solved-task probe. | `tests/harness_bench/probes/cost_per_solved_task.py` |
 | Examples | A software-factory foreman with triager, fixer and watcher workers; a shim-janitor agent; an opt-in Elephant-Goldfish design-review bundle. | `examples/factory/`, `examples/shim-janitor/`, `examples/egm/` |
 | Deployment | One-command Railway deploy built from source, with generated secrets and a persistent volume. | `deploy/railway/deploy.sh`, `railway.toml` |
+| Public signup safety | Attempt limits on sign-in, open signup and password reset; self-serve password reset by emailed single-use link; baseline security response headers with an optional `frame-ancestors` setting; operator terms and privacy links on the sign-up page. | `omnigent/server/{auth_rate_limit,password_reset,security_headers}.py`, `omnigent/server/routes/accounts_auth.py`, `web/src/pages/{ForgotPasswordPage,ResetPasswordPage}.tsx`, `docs/PUBLIC_LAUNCH.md` |
 | Branding | The WakeVane name, tagline and mark as default branding, with the "Powered by Omnigent" credit shown. | `omnigent/resources/branding/wakevane/` |
 
 ## Changed

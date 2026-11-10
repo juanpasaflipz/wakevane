@@ -646,6 +646,27 @@ class SqlAlchemyAccountStore:
                 or 0
             )
 
+    def find_users_by_email(self, email: str, *, limit: int = 3) -> list[Account]:
+        """Active password accounts whose contact address is ``email``.
+
+        :param email: A normalized lowercase address, e.g. ``"ana@example.com"``.
+        :param limit: Most accounts to return; several accounts may share
+            one address.
+        """
+        with self._session("select_users_by_email") as session:
+            rows = session.scalars(
+                select(SqlUser)
+                .where(
+                    SqlUser.workspace_id == current_workspace_id(),
+                    SqlUser.email == email,
+                    SqlUser.password_hash.is_not(None),
+                    SqlUser.deleted_at.is_(None),
+                )
+                .order_by(SqlUser.id)
+                .limit(limit)
+            ).all()
+            return [_to_account(row) for row in rows]
+
     def mark_logged_in(self, user_id: str, when_epoch_seconds: int) -> None:
         """Bump ``last_login_at`` on every successful login.
 

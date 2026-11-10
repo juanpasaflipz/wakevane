@@ -6140,6 +6140,27 @@
             "title": "Needs Setup",
             "type": "boolean"
           },
+          "open_signup": {
+            "default": false,
+            "title": "Open Signup",
+            "type": "boolean"
+          },
+          "password_reset": {
+            "default": false,
+            "title": "Password Reset",
+            "type": "boolean"
+          },
+          "privacy_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Privacy Url"
+          },
           "public_sharing_enabled": {
             "title": "Public Sharing Enabled",
             "type": "boolean"
@@ -6211,6 +6232,17 @@
           },
           "smart_routing_sources": {
             "$ref": "#/components/schemas/SmartRoutingSourcesInfo"
+          },
+          "terms_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Terms Url"
           }
         },
         "required": [

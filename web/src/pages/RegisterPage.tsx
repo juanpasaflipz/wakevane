@@ -38,6 +38,8 @@ export function RegisterPage() {
   // A public deploy registers without an invite; the server still refuses an
   // invite-less POST when open signup is off.
   const openSignup = info !== "loading" && info.open_signup === true;
+  const termsUrl = info !== "loading" ? (info.terms_url ?? null) : null;
+  const privacyUrl = info !== "loading" ? (info.privacy_url ?? null) : null;
 
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
@@ -207,7 +209,44 @@ export function RegisterPage() {
           >
             {submitting ? "Creating…" : "Create account"}
           </Button>
+
+          {(termsUrl !== null || privacyUrl !== null) && (
+            <p className="text-center text-sm text-muted-foreground">
+              By creating an account you agree to the{" "}
+              {termsUrl !== null && (
+                <a
+                  className="underline underline-offset-4"
+                  href={termsUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Terms of Service
+                </a>
+              )}
+              {termsUrl !== null && privacyUrl !== null && " and "}
+              {privacyUrl !== null && (
+                <a
+                  className="underline underline-offset-4"
+                  href={privacyUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Privacy Policy
+                </a>
+              )}
+              .
+            </p>
+          )}
         </form>
+      )}
+
+      {openSignup && invite === "" && (
+        <p className="text-center text-sm text-muted-foreground">
+          Already have an account?{" "}
+          <a className="underline underline-offset-4" href={withBasePath("/login")}>
+            Sign in
+          </a>
+        </p>
       )}
     </>
   );

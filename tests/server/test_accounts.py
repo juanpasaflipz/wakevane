@@ -2544,3 +2544,243 @@ def test_resend_sends_a_fresh_link_and_is_rate_limited(
     assert frank.post("/auth/verify-email/resend").status_code == 429
     # Any unexpired link still works.
     assert "verified=1" in _TC(app.app).get(first_link, follow_redirects=False).headers["location"]
+
+
+# ── Self-serve password reset ─────────────────────────────────────
+
+
+def _reset_token(outbox: list[dict[str, str]]) -> str:
+    import re as _re
+
+    match = _re.search(r"/reset-password\?t=([A-Za-z0-9_.-]+)", outbox[-1]["text"])
+    assert match, outbox[-1]["text"]
+    return match.group(1)
+
+
+def _register_with_email(app: TestClient, username: str, email: str) -> TestClient:
+    from fastapi.testclient import TestClient as _TC
+
+    client = _TC(app.app)
+    created = client.post(
+        "/auth/register",
+        json={"username": username, "password": "old-password-1", "email": email},
+    )
+    assert created.status_code == 200, created.text
+    return client
+
+
+def test_forgot_password_mails_a_single_use_link_that_signs_out_other_sessions(
+    accounts_app_verified_credit: tuple[TestClient, list[dict[str, str]]],
+) -> None:
+    app, outbox = accounts_app_verified_credit
+    from fastapi.testclient import TestClient as _TC
+
+    assert app.get("/v1/info").json()["password_reset"] is True
+    signed_in = _register_with_email(app, "gina", "gina@example.com")
+    assert signed_in.get("/auth/me").status_code == 200
+
+    visitor = _TC(app.app)
+    asked = visitor.post("/auth/password/forgot", json={"identifier": "Gina@Example.com"})
+    assert asked.status_code == 200 and asked.json() == {"sent": True}
+    assert outbox[-1]["to"] == "gina@example.com"
+    assert outbox[-1]["subject"] == "Reset your password"
+    token = _reset_token(outbox)
+
+    done = visitor.post(
+        "/auth/password/reset", json={"token": token, "new_password": "new-password-2"}
+    )
+    assert done.status_code == 200 and done.json()["username"] == "gina"
+
+    # The session opened before the reset no longer authenticates.
+    assert signed_in.get("/auth/me").status_code == 401
+    old = visitor.post("/auth/login", json={"username": "gina", "password": "old-password-1"})
+    assert old.status_code == 401
+    new = visitor.post("/auth/login", json={"username": "gina", "password": "new-password-2"})
+    assert new.status_code == 200
+
+    replay = _TC(app.app).post(
+        "/auth/password/reset", json={"token": token, "new_password": "third-password-3"}
+    )
+    assert replay.status_code == 400
+    assert (
+        visitor.post(
+            "/auth/login", json={"username": "gina", "password": "new-password-2"}
+        ).status_code
+        == 200
+    )
+
+
+def test_forgot_password_does_not_reveal_whether_an_account_exists(
+    accounts_app_verified_credit: tuple[TestClient, list[dict[str, str]]],
+) -> None:
+    app, outbox = accounts_app_verified_credit
+    _register_with_email(app, "hugo", "hugo@example.com")
+    before = len(outbox)
+
+    unknown_name = app.post("/auth/password/forgot", json={"identifier": "nobody-here"})
+    unknown_email = app.post("/auth/password/forgot", json={"identifier": "nobody@example.com"})
+    by_name = app.post("/auth/password/forgot", json={"identifier": "hugo"})
+
+    assert unknown_name.status_code == unknown_email.status_code == by_name.status_code == 200
+    assert unknown_name.json() == unknown_email.json() == by_name.json() == {"sent": True}
+    # Only the request naming a real account produced a message.
+    assert len(outbox) == before + 1 and outbox[-1]["to"] == "hugo@example.com"
+
+
+def test_reset_password_rejects_forged_expired_and_session_tokens(
+    accounts_app_verified_credit: tuple[TestClient, list[dict[str, str]]],
+) -> None:
+    app, _outbox = accounts_app_verified_credit
+    from omnigent.server.password_reset import mint_reset_token
+
+    signed_in = _register_with_email(app, "iris", "iris@example.com")
+    session_token = signed_in.post(
+        "/auth/login", json={"username": "iris", "password": "old-password-1"}
+    ).json()["token"]
+    forged = mint_reset_token(user_id="iris", account_generation="x", cookie_secret=b"k" * 32)
+    for token in ("not-a-token", forged, session_token):
+        refused = app.post(
+            "/auth/password/reset", json={"token": token, "new_password": "new-password-2"}
+        )
+        assert refused.status_code == 400, token
+        assert refused.json() == {"error": "reset link invalid or expired"}
+    assert (
+        app.post(
+            "/auth/login", json={"username": "iris", "password": "old-password-1"}
+        ).status_code
+        == 200
+    )
+
+
+def test_forgot_password_is_unavailable_without_a_mailer(accounts_app: TestClient) -> None:
+    assert accounts_app.get("/v1/info").json()["password_reset"] is False
+    resp = accounts_app.post("/auth/password/forgot", json={"identifier": "admin"})
+    assert resp.status_code == 503
+
+
+def test_forgot_password_requests_are_capped_per_account(
+    accounts_app_verified_credit: tuple[TestClient, list[dict[str, str]]],
+) -> None:
+    app, outbox = accounts_app_verified_credit
+    _register_with_email(app, "jose", "jose@example.com")
+    before = len(outbox)
+    statuses = [
+        app.post("/auth/password/forgot", json={"identifier": "jose"}).status_code
+        for _ in range(6)
+    ]
+    # Three messages per account per hour; the sixth request from one address is refused.
+    assert statuses == [200, 200, 200, 200, 200, 429]
+    assert len(outbox) == before + 3
+
+
+# ── Attempt limits on unauthenticated auth routes ─────────────────
+
+
+def test_login_locks_out_after_repeated_wrong_passwords_then_reports_retry_after(
+    accounts_app: TestClient,
+) -> None:
+    wrong = {"username": "admin", "password": "not-the-password"}
+    statuses = [accounts_app.post("/auth/login", json=wrong).status_code for _ in range(5)]
+    assert statuses == [401] * 5
+
+    blocked = accounts_app.post("/auth/login", json=wrong)
+    assert blocked.status_code == 429
+    assert int(blocked.headers["Retry-After"]) > 0
+    # The correct password is refused too while the lockout holds.
+    right = accounts_app.post(
+        "/auth/login", json={"username": "admin", "password": "admin-pw-12345"}
+    )
+    assert right.status_code == 429
+
+
+def test_login_lockout_is_scoped_to_the_calling_address(accounts_app: TestClient) -> None:
+    wrong = {"username": "admin", "password": "not-the-password"}
+    attacker = {"cf-connecting-ip": "203.0.113.9"}
+    for _ in range(5):
+        accounts_app.post("/auth/login", json=wrong, headers=attacker)
+    assert accounts_app.post("/auth/login", json=wrong, headers=attacker).status_code == 429
+
+    owner = accounts_app.post(
+        "/auth/login",
+        json={"username": "admin", "password": "admin-pw-12345"},
+        headers={"cf-connecting-ip": "198.51.100.4"},
+    )
+    assert owner.status_code == 200
+
+
+def test_successful_login_clears_that_callers_strikes(accounts_app: TestClient) -> None:
+    wrong = {"username": "admin", "password": "not-the-password"}
+    right = {"username": "admin", "password": "admin-pw-12345"}
+    for _ in range(4):
+        assert accounts_app.post("/auth/login", json=wrong).status_code == 401
+    assert accounts_app.post("/auth/login", json=right).status_code == 200
+    for _ in range(4):
+        assert accounts_app.post("/auth/login", json=wrong).status_code == 401
+    assert accounts_app.post("/auth/login", json=right).status_code == 200
+
+
+def test_open_signup_is_capped_per_address(
+    accounts_app_verified_credit: tuple[TestClient, list[dict[str, str]]],
+) -> None:
+    app, _outbox = accounts_app_verified_credit
+    from fastapi.testclient import TestClient as _TC
+
+    statuses = [
+        _TC(app.app)
+        .post(
+            "/auth/register",
+            json={
+                "username": f"signup{index}",
+                "password": "aaaaaaaa",
+                "email": f"signup{index}@example.com",
+            },
+        )
+        .status_code
+        for index in range(11)
+    ]
+    assert statuses == [200] * 10 + [429]
+
+
+def test_attempt_limits_can_be_switched_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OMNIGENT_ACCOUNTS_RATE_LIMIT", "0")
+    for client in _build_accounts_app(tmp_path, monkeypatch, init_admin_password="admin-pw-12345"):
+        wrong = {"username": "admin", "password": "not-the-password"}
+        statuses = {client.post("/auth/login", json=wrong).status_code for _ in range(8)}
+        assert statuses == {401}
+
+
+# ── Browser hardening headers ─────────────────────────────────────
+
+
+def test_responses_carry_hardening_headers(accounts_app: TestClient) -> None:
+    plain = accounts_app.get("/v1/info")
+    assert plain.headers["X-Content-Type-Options"] == "nosniff"
+    assert plain.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
+    assert "Strict-Transport-Security" not in plain.headers
+    assert "Content-Security-Policy" not in plain.headers
+
+    behind_tls = accounts_app.get("/v1/info", headers={"x-forwarded-proto": "https"})
+    assert behind_tls.headers["Strict-Transport-Security"] == "max-age=31536000"
+
+
+def test_frame_ancestors_setting_blocks_cross_origin_framing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OMNIGENT_FRAME_ANCESTORS", "'self'")
+    for client in _build_accounts_app(tmp_path, monkeypatch, init_admin_password="admin-pw-12345"):
+        resp = client.get("/v1/info")
+        assert resp.headers["Content-Security-Policy"] == "frame-ancestors 'self'"
+        assert resp.headers["X-Frame-Options"] == "SAMEORIGIN"
+
+
+def test_info_reports_operator_policy_links(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OMNIGENT_TERMS_URL", "https://example.com/terms")
+    monkeypatch.setenv("OMNIGENT_PRIVACY_URL", "javascript:alert(1)")
+    for client in _build_accounts_app(tmp_path, monkeypatch, init_admin_password="admin-pw-12345"):
+        info = client.get("/v1/info").json()
+        assert info["terms_url"] == "https://example.com/terms"
+        assert info["privacy_url"] is None

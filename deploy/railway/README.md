@@ -54,6 +54,10 @@ default; nothing needs to be set to enable them.
    | `OMNIGENT_CREDENTIAL_ENC_KEY` | output of `openssl rand -base64 32` |
    | `OMNIGENT_DATA_DIR` | `/data/omnigent` |
    | `OMNIGENT_ADMIN_CREDENTIALS_PATH` | `/data/admin-credentials` |
+   | `OMNIGENT_FRAME_ANCESTORS` | `'self'` |
+
+   Opening the server to public signup needs more than these; see
+   [Running WakeVane as a public service](../../docs/PUBLIC_LAUNCH.md).
 
 3. Add a **Volume** to the service mounted at `/data`.
 4. Under **Settings, Networking**, generate a domain. Sign in as `admin`.

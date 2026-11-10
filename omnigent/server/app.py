@@ -193,6 +193,12 @@ class FilesystemAttachmentsInfo(BaseModel):
     all_types: bool
 
 
+def _policy_link(env_name: str) -> str | None:
+    """An operator-set ``http(s)`` link from the environment, else ``None``."""
+    value = os.environ.get(env_name, "").strip()
+    return value if value.startswith(("https://", "http://")) else None
+
+
 class ServerInfoResponse(BaseModel):
     accounts_enabled: bool
     single_user: bool
@@ -200,6 +206,11 @@ class ServerInfoResponse(BaseModel):
     needs_setup: bool
     # Accounts mode accepts ``POST /auth/register`` without an invite.
     open_signup: bool = False
+    # Accounts mode can mail a self-serve password reset link.
+    password_reset: bool = False
+    # Operator-supplied policy links shown on the sign-up page.
+    terms_url: str | None = None
+    privacy_url: str | None = None
     databricks_features: bool
     managed_sandboxes_enabled: bool
     durable_initial_input: bool = False
@@ -2263,6 +2274,15 @@ def create_app(
     managed_host_keepalive.configure(conversation_store, host_store, sandbox_config)
     pending_elicitations.set_count_persist_hook(session_live_state.persist_pending_count)
 
+    from omnigent.server.security_headers import (
+        apply_security_headers,
+        build_security_headers,
+    )
+
+    security_headers_by_https = {
+        https: build_security_headers(https=https) for https in (False, True)
+    }
+
     @app.middleware("http")
     async def _record_server_metrics(
         request: Request,
@@ -2339,6 +2359,11 @@ def create_app(
         try:
             response = await call_next(request)
             status_code = response.status_code
+            served_over_https = (
+                request.url.scheme == "https"
+                or request.headers.get("x-forwarded-proto", "").split(",")[0].strip() == "https"
+            )
+            apply_security_headers(response.headers, security_headers_by_https[served_over_https])
             response.headers["X-Request-Id"] = request_id
             return response
         except RuntimeError as exc:
@@ -3294,6 +3319,10 @@ def create_app(
                 and bool(
                     getattr(getattr(auth_provider, "_accounts_config", None), "open_signup", False)
                 ),
+                "password_reset": accounts_enabled
+                and bool(getattr(app.state, "password_reset_enabled", False)),
+                "terms_url": _policy_link("OMNIGENT_TERMS_URL"),
+                "privacy_url": _policy_link("OMNIGENT_PRIVACY_URL"),
                 "databricks_features": databricks_features,
                 "managed_sandboxes_enabled": managed_sandboxes_enabled,
                 "durable_initial_input": startup_inputs is not None,
@@ -3578,7 +3607,12 @@ def create_app(
         from omnigent.server.billing_store import BillingStore
         from omnigent.server.billing_stripe import StripeSdkGateway
 
-        if not funded_trial_enabled or funded_trial_store is None or auth_provider is None:
+        if (
+            not funded_trial_enabled
+            or funded_trial_store is None
+            or permission_store is None
+            or auth_provider is None
+        ):
             raise RuntimeError(
                 "OMNIGENT_FEATURES=billing requires funded_trial, a database and "
                 "multi-user authentication"
@@ -4847,6 +4881,8 @@ def create_app(
             # authenticating; every request checks the generation and tombstone.
             auth_provider.set_account_check(account_store.accepts_generation)
             app.add_middleware(AccountAuthenticationMiddleware, auth_provider=auth_provider)
+            accounts_mailer = SmtpMailer.from_environment()
+            app.state.password_reset_enabled = accounts_mailer is not None
             app.include_router(
                 create_accounts_auth_router(
                     auth_provider,
@@ -4856,7 +4892,7 @@ def create_app(
                     device_grant_store,
                     scheduled_task_store,
                     funded_trial=getattr(app.state, "funded_trial", None),
-                    mailer=SmtpMailer.from_environment(),
+                    mailer=accounts_mailer,
                 ),
                 prefix="/auth",
                 tags=["auth"],

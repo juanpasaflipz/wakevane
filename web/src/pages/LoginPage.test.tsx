@@ -3,6 +3,8 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LoginPage } from "./LoginPage";
 import * as accountsApi from "@/lib/accountsApi";
+import { CapabilitiesProvider } from "@/lib/CapabilitiesContext";
+import { FALLBACK_SERVER_INFO, type ServerInfo } from "@/lib/capabilities";
 
 // The authenticated auto-bounce path is the simplest way to observe the
 // sanitized return_to reaching the navigation sink: getMe() resolving to an
@@ -248,5 +250,38 @@ describe("LoginPage forced re-auth (?reauth=1)", () => {
 
     await waitFor(() => expect(hrefWrites.length).toBeGreaterThan(0));
     expect(hrefWrites[0]).toBe("/oauth/device?user_code=ABCD");
+  });
+});
+
+describe("LoginPage on a public (open signup) deployment", () => {
+  function renderWith(info: Partial<ServerInfo>) {
+    vi.mocked(accountsApi.getMe).mockResolvedValue(null);
+    const serverInfo = { ...FALLBACK_SERVER_INFO, ...info };
+    return render(
+      <CapabilitiesProvider info={serverInfo}>
+        <MemoryRouter initialEntries={["/login"]}>
+          <LoginPage />
+        </MemoryRouter>
+      </CapabilitiesProvider>,
+    );
+  }
+
+  it("offers sign-up and password reset and hides the self-host setup hints", () => {
+    renderWith({ accounts_enabled: true, open_signup: true, password_reset: true });
+    expect(screen.getByRole("link", { name: /create an account/i }).getAttribute("href")).toBe(
+      "/register",
+    );
+    expect(screen.getByRole("link", { name: /forgot password/i }).getAttribute("href")).toBe(
+      "/forgot-password",
+    );
+    expect(screen.queryByText(/whoami/)).toBeNull();
+    expect(screen.queryByText(/OMNIGENT_ACCOUNTS_INIT_ADMIN_PASSWORD/)).toBeNull();
+  });
+
+  it("keeps the operator hints and no public links on an invite-only server", () => {
+    renderWith({ accounts_enabled: true });
+    expect(screen.queryByRole("link", { name: /create an account/i })).toBeNull();
+    expect(screen.queryByRole("link", { name: /forgot password/i })).toBeNull();
+    expect(screen.getByText(/whoami/)).toBeTruthy();
   });
 });
