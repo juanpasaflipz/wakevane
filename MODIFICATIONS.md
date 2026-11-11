@@ -41,6 +41,10 @@ the `omnigent` and `omni` commands still work, and settings keep their
 | Slack integration | Optionally forwards channel messages to the event bus. |
 | Auth helpers | A generic `require_admin` helper. |
 | Railway config | Builds from source instead of pulling upstream's prebuilt image. |
+| Funded launches | An unattended launch (subscription or scheduled task) refused only because the account's funded workflow slot is busy stays queued and is retried for up to 30 minutes instead of failing at once. Interactive creates are unchanged. |
+| Polly example | The roster preflight treats `needs-auth` as launchable (a session can supply the credential); workers check the repository's pinned runtime before trusting its checks and report a mismatch as such; the orchestrator is told which models let `claude_code` run without approval prompts. |
+| Efficiency scorecard | A dated Claude snapshot id is counted under its alias. |
+| Web UI | The settings Admin group appears on a direct load of a settings URL; settings copy uses the configured app name; the Subscriptions repository picker has a filter for long lists; a failed launch has its own headline. |
 | Docs | Subscriptions, shims, efficiency, credential encryption, Railway, GitHub App setup, and feature-flag inventory updated for the above. |
 
 - Added default-off `egm_template` Design review entry, durable template ownership, immutable run snapshots, and connected-host preflight. Deployment requires migration and coordinated writer upgrade; see `examples/egm/README.md`.

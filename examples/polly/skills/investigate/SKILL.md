@@ -39,6 +39,10 @@ repository-specific technical question.
    opposite-vendor `review` worker.
 
 ## Notes
+- A worker report marked ENVIRONMENT MISMATCH (the machine's runtime differs
+  from the version the repository pins) says nothing about the repository.
+  Carry the mismatch into your answer as an open item and never base a
+  ready / not-ready verdict on failures from a mismatched run.
 - The orchestrator may use its own tools only to create task packets, maintain
   the registry, or check deterministic external status. It must not answer the
   user's substantive question from its own direct file reads, shell output,

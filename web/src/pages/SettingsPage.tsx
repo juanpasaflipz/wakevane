@@ -117,6 +117,7 @@ import {
   fetchDatabricksStatus,
   type DatabricksConnectionStatus,
 } from "@/lib/databricksIntegration";
+import { useAppName } from "@/lib/branding";
 import { getCurrentIsAdmin, resolveIdentity } from "@/lib/identity";
 import { useServerInfo } from "@/lib/CapabilitiesContext";
 import { isFeatureEnabled } from "@/lib/capabilities";
@@ -923,6 +924,7 @@ function HideUnconfiguredHarnessesControl() {
 }
 
 function AppearanceSection() {
+  const appName = useAppName();
   // Embedded: the host owns light/dark, so the Mode picker would be a no-op —
   // replace it with a note (plus a link to the host's own theme settings when
   // one is provided). The color palette, terminal theme, and font controls are
@@ -1033,7 +1035,7 @@ function AppearanceSection() {
   return (
     <Section
       title="Appearance"
-      description="Choose how Omnigent looks on this device."
+      description={`Choose how ${appName} looks on this device.`}
       descriptionClassName="text-sm"
     >
       <div className="flex flex-col gap-6">
@@ -1195,7 +1197,7 @@ function AppearanceSection() {
           <DialogHeader>
             <DialogTitle>Import settings</DialogTitle>
             <DialogDescription>
-              Choose an exported Omnigent settings file to apply. This will overwrite your current
+              Choose an exported {appName} settings file to apply. This will overwrite your current
               appearance and preference settings.
             </DialogDescription>
           </DialogHeader>
@@ -1229,8 +1231,9 @@ function AppearanceSection() {
 function GitSection() {
   const info = useServerInfo();
   const archiveWorktreeCleanup = info !== "loading" && info.archive_worktree_cleanup === true;
+  const appName = useAppName();
   return (
-    <Section title="Git" description="Configure how Omnigent works with Git.">
+    <Section title="Git" description={`Configure how ${appName} works with Git.`}>
       <SettingsGroup title="Worktrees" testId="settings-group-worktrees">
         <AlwaysUseWorktreeControl />
         <div className="mt-4 border-t border-border pt-4">
@@ -1825,8 +1828,9 @@ function TerminalClipboardControl() {
 
 /** App-wide behavior settings. */
 function GeneralSection() {
+  const appName = useAppName();
   return (
-    <Section title="General" description="Configure general Omnigent behavior.">
+    <Section title="General" description={`Configure general ${appName} behavior.`}>
       <div className="flex flex-col gap-6">
         <SettingsGroup title="Composer" testId="settings-group-composer">
           <ComposerSendShortcutControl />
@@ -2838,10 +2842,11 @@ function selectValueToRetentionDays(value: string): number | null {
 }
 
 function ImportSection() {
+  const appName = useAppName();
   return (
     <Section
       title="Import sessions"
-      description="Pull local chats from a machine you're running into Omnigent. Sessions already imported are skipped."
+      description={`Pull local chats from a machine you're running into ${appName}. Sessions already imported are skipped.`}
     >
       <div className="flex flex-col gap-3">
         <h2 className="text-ui font-medium">Import from a machine</h2>

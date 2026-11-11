@@ -4335,6 +4335,7 @@ async def _run_managed_launch(
     agent_store: AgentStore | None = None,
     agent_id: str | None = None,
     host_id: str | None = None,
+    funded_concurrency_wait_s: float = 0.0,
 ) -> None:
     """
     Provision a managed sandbox for a session in the background.
@@ -4401,6 +4402,9 @@ async def _run_managed_launch(
         classifier, or ``None`` to leave it unstamped.
     :param host_id: Host id a managed create asked for, or
         ``None`` to mint one. Ignored on a relaunch.
+    :param funded_concurrency_wait_s: How long an unattended launch waits
+        for the account's running funded workflow to finish before failing,
+        e.g. ``1800.0``. ``0`` fails at once, as an interactive create does.
     """
     from omnigent.server.managed_hosts import (
         deployment_with_inference_snapshot,
@@ -4423,6 +4427,7 @@ async def _run_managed_launch(
         conversation=saved_conversation,
         phase="relaunch" if relaunch_host is not None else "launch",
         tracker=tracker,
+        concurrency_wait_s=funded_concurrency_wait_s,
     )
     if admitted is None:
         return
@@ -4483,6 +4488,19 @@ async def _run_managed_launch(
         )
 
 
+# Seconds between admission retries while a launch waits for a free funded slot.
+_FUNDED_CONCURRENCY_POLL_S = 15.0
+
+
+def _funded_wait_expired_message(waited_s: float) -> str:
+    """The failure shown when a queued launch never got a funded slot."""
+    minutes = max(1, round(waited_s / 60))
+    return (
+        f"This run waited {minutes} min for another funded workflow on this account "
+        "to finish and was not started. Re-run it once that workflow ends."
+    )
+
+
 async def _admit_funded_launch(
     *,
     sandbox_config: ManagedSandboxDeployment,
@@ -4492,6 +4510,7 @@ async def _admit_funded_launch(
     conversation: Conversation | None,
     phase: str,
     tracker: ManagedLaunchTracker,
+    concurrency_wait_s: float = 0.0,
 ) -> TrialLaunch | None:
     """Reserve trial compute and arm the gateway credential before provisioning.
 
@@ -4499,6 +4518,10 @@ async def _admit_funded_launch(
     targets, carrying a minted gateway token and its compute hold for trial
     targets. Returns ``None`` after settling the launch as failed on denial;
     a denial creates no sandbox and never retries on another payer.
+
+    A ``concurrency`` denial is the one transient reason: with
+    *concurrency_wait_s* set the launch stays queued and admission is retried
+    until the account's running workflow ends or the wait runs out.
     """
     from omnigent.server.egm_coding import CODING_CAPABILITY, coding_binding
     from omnigent.server.funded_trial import (
@@ -4519,29 +4542,45 @@ async def _admit_funded_launch(
     if coding is not None:
         # Approved coding continues the review's funded workflow and needs the coding grant.
         root_session_id = coding.review_session_id
-    try:
-        return await asyncio.to_thread(
-            prepare_trial_launch,
-            sandbox_config,
-            provider=provider,
-            owner=owner,
-            session_id=session_id,
-            root_session_id=root_session_id,
-            phase=phase,
-            launch_id=uuid.uuid4().hex,
-            capabilities=(CODING_CAPABILITY,) if coding is not None else (),
-        )
-    except FundedTrialDenied as denied:
-        _logger.info(
-            "Funded trial denied managed %s for session %s: %s",
-            phase,
-            session_id,
-            denied.reason,
-            extra={"session_id": session_id},
-        )
-        tracker.fail(session_id, denied.message)
-        _publish_sandbox_status(session_id, "failed", denied.message)
-        return None
+    waited_s = 0.0
+    while True:
+        try:
+            return await asyncio.to_thread(
+                prepare_trial_launch,
+                sandbox_config,
+                provider=provider,
+                owner=owner,
+                session_id=session_id,
+                root_session_id=root_session_id,
+                phase=phase,
+                launch_id=uuid.uuid4().hex,
+                capabilities=(CODING_CAPABILITY,) if coding is not None else (),
+            )
+        except FundedTrialDenied as denied:
+            queued = denied.reason == "concurrency" and concurrency_wait_s > 0
+            if queued and waited_s < concurrency_wait_s:
+                if waited_s == 0:
+                    _logger.info(
+                        "Managed %s for session %s queued behind a running funded workflow",
+                        phase,
+                        session_id,
+                        extra={"session_id": session_id},
+                    )
+                pause_s = min(_FUNDED_CONCURRENCY_POLL_S, concurrency_wait_s - waited_s)
+                await asyncio.sleep(pause_s)
+                waited_s += pause_s
+                continue
+            _logger.info(
+                "Funded trial denied managed %s for session %s: %s",
+                phase,
+                session_id,
+                denied.reason,
+                extra={"session_id": session_id},
+            )
+            message = _funded_wait_expired_message(waited_s) if queued else denied.message
+            tracker.fail(session_id, message)
+            _publish_sandbox_status(session_id, "failed", message)
+            return None
 
 
 def _cloud_review_preparer(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from typing import Any
@@ -399,6 +400,78 @@ async def test_trial_target_launch_admission(trial: dict[str, Any]) -> None:
             launch_id="4",
         )
     assert unwired.value.reason == "disabled"
+
+
+@pytest.mark.parametrize("slot_frees", [True, False])
+async def test_unattended_launch_queues_behind_a_running_funded_workflow(
+    trial: dict[str, Any], monkeypatch: pytest.MonkeyPatch, slot_frees: bool
+) -> None:
+    from omnigent.server.funded_trial import prepare_trial_launch
+    from omnigent.server.managed_hosts import ManagedLaunchTracker
+    from omnigent.server.routes._sessions import orchestration
+
+    await _grant(trial["client"])
+    deployment = _trial_deployment(trial["policy"])
+    running = prepare_trial_launch(
+        deployment,
+        provider=None,
+        owner="owner",
+        session_id="root-1",
+        root_session_id="root-1",
+        phase="launch",
+        launch_id="1",
+    )
+    assert running.charge is not None
+    tracker = ManagedLaunchTracker()
+    tracker.begin("root-2")
+    monkeypatch.setattr(orchestration, "_FUNDED_CONCURRENCY_POLL_S", 0.01)
+    monkeypatch.setattr(orchestration, "_publish_sandbox_status", lambda *args, **kwargs: None)
+
+    async def admit(wait_s: float) -> Any:
+        return await orchestration._admit_funded_launch(
+            sandbox_config=deployment,
+            provider=None,
+            owner="owner",
+            session_id="root-2",
+            conversation=None,
+            phase="launch",
+            tracker=tracker,
+            concurrency_wait_s=wait_s,
+        )
+
+    if slot_frees:
+        queued = asyncio.create_task(admit(5.0))
+        await asyncio.sleep(0.05)
+        assert not queued.done()
+        trial["store"].release(running.charge.id)
+        admitted = await asyncio.wait_for(queued, timeout=5)
+        assert admitted is not None and admitted.charge is not None
+        assert admitted.charge.root_session_id == "root-2"
+        launch = tracker.get("root-2")
+        assert launch is not None and launch.error is None
+        return
+
+    assert await admit(0.03) is None
+    launch = tracker.get("root-2")
+    assert launch is not None and launch.error is not None
+    assert "waited" in launch.error and "was not started" in launch.error
+    # An interactive create (no wait) keeps the immediate refusal.
+    tracker.begin("root-3")
+    assert (
+        await orchestration._admit_funded_launch(
+            sandbox_config=deployment,
+            provider=None,
+            owner="owner",
+            session_id="root-3",
+            conversation=None,
+            phase="launch",
+            tracker=tracker,
+        )
+        is None
+    )
+    refused = tracker.get("root-3")
+    assert refused is not None
+    assert refused.error == "Another funded workflow is already running for this account."
 
 
 async def test_trial_launch_arms_a_scoped_gateway_credential(trial: dict[str, Any]) -> None:

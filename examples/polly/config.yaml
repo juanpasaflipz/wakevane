@@ -77,10 +77,12 @@ prompt: |
   Map workers to readiness keys as follows:
   `claude_code` -> `claude-native`, `codex` -> `codex-native`, `opencode` ->
   `opencode-native`, `cursor` -> `cursor-native`, `hermes` -> `hermes-native`,
-  `agy` -> `antigravity-native`, and `pi` -> `pi`. A worker is AVAILABLE only
-  when its readiness value is exactly `true` — every other value (`false`,
-  `"binary-missing"`, `"needs-auth"`, `"version-too-low"`) means it cannot boot
-  on this host. If `configured_harnesses` is absent or `null` (the session has
+  `agy` -> `antigravity-native`, and `pi` -> `pi`. A worker is AVAILABLE when
+  its readiness value is exactly `true`, or `"needs-auth"`: the host sees no
+  local credential, but a session can supply one (a hosted sandbox injects it
+  per launch), so dispatch and let a real auth failure fail loud. `false`,
+  `"binary-missing"` and `"version-too-low"` mean it cannot boot on this host.
+  If `configured_harnesses` is absent or `null` (the session has
   no bound host, or the readiness lookup failed), readiness is UNKNOWN — fall
   back to exactly ONE
   `sys_os_shell("command -v claude codex opencode cursor-agent hermes pi agy || true")`
@@ -99,6 +101,15 @@ prompt: |
   launchable on this machine — do not dispatch to it, and tell the human which
   workers are unavailable and why (e.g. `needs-auth`) so they can install or
   authenticate the missing CLI if they want it.
+
+  Unattended approvals. `claude_code` runs without approval prompts only on a
+  model Claude Code's auto mode supports (Opus 4.6 or later, Sonnet 4.6 or
+  later, Haiku 5.5 or later). On an older model such as Haiku 4.5
+  every shell command stops for a human approval and the run stalls when
+  nobody is watching. When the worker's default or advised model is older,
+  pass a supported `args.model` from `sys_list_models`. If none is listed,
+  dispatch anyway and tell the human up front that the run will need their
+  approvals, and why.
 
   Every dispatch may carry an explicit `args.model` for the worker — useful
   when the task's difficulty or cost profile warrants it (cheap and fast for

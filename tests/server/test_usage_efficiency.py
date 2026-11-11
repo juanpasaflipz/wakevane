@@ -12,6 +12,7 @@ from omnigent.server.usage_efficiency import (
     aggregate,
     counters_from_usage,
     efficiency_from_usage,
+    model_counters_from_usage,
     score_session,
     session_cost_usd,
 )
@@ -256,3 +257,17 @@ def test_aggregate_cost_share_none_when_no_model_cost() -> None:
     report = aggregate(sessions, window_days=1, limit=1)
     assert report.by_model["m"].cost_share is None
     assert report.by_model["m"].output_share == pytest.approx(1 / 11)
+
+
+def test_model_counters_merge_dated_claude_snapshot_into_alias() -> None:
+    usage = {
+        "by_model": {
+            "claude-haiku-4-5-20251001": {"input_tokens": 10, "output_tokens": 1},
+            "claude-haiku-4-5": {"input_tokens": 5, "output_tokens": 2},
+            "gpt-5-20251001": {"input_tokens": 3},
+        }
+    }
+    counters = model_counters_from_usage(usage)
+    assert set(counters) == {"claude-haiku-4-5", "gpt-5-20251001"}
+    assert counters["claude-haiku-4-5"].input_tokens == 15
+    assert counters["claude-haiku-4-5"].output_tokens == 3
