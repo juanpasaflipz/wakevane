@@ -39,6 +39,7 @@ from omnigent.server.ladders.scoreboard import build_scoreboard
 from omnigent.server.ladders.store import LadderStore
 from omnigent.server.routes._auth_helpers import require_user
 from omnigent.server.routes._launch_target import validate_launch_target
+from omnigent.server.routes._session_create_validation import validate_session_permission_mode
 from omnigent.server.routes.subscriptions import (
     KIND_PATTERN,
     MAX_PROMPT_TEMPLATE_CHARS,
@@ -61,6 +62,7 @@ class RungRequest(BaseModel):
     model_override: str | None = None
     max_cost_usd: float | None = Field(default=None, gt=0)
     label: str | None = Field(default=None, max_length=64)
+    permission_mode: str | None = None
 
 
 class CreateLadderRequest(BaseModel):
@@ -230,6 +232,7 @@ def create_ladders_router(
                     model_override=model_override,
                     max_cost_usd=rung.max_cost_usd,
                     label=rung.label,
+                    permission_mode=validate_session_permission_mode(rung.permission_mode),
                 )
             )
         ladder = store.create_ladder(

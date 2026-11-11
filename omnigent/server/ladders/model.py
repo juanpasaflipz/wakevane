@@ -50,12 +50,16 @@ class Rung:
         ``None`` uses the agent's own.
     :param max_cost_usd: Spend cap for one attempt on this rung.
     :param label: Name shown on the scoreboard, e.g. ``"cheap"``.
+    :param permission_mode: Native-harness permission mode for the session,
+        e.g. ``"bypassPermissions"``; ``None`` keeps the harness default,
+        which asks before acting.
     """
 
     agent_id: str
     model_override: str | None = None
     max_cost_usd: float | None = None
     label: str | None = None
+    permission_mode: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         """The rung as stored and returned by the API."""
@@ -64,6 +68,7 @@ class Rung:
             "model_override": self.model_override,
             "max_cost_usd": self.max_cost_usd,
             "label": self.label,
+            "permission_mode": self.permission_mode,
         }
 
 
@@ -142,13 +147,19 @@ def attempt_branch(attempt_id: str) -> str:
     return f"{ATTEMPT_BRANCH_PREFIX}{attempt_id}"
 
 
+_BRANCH_REF_PREFIX = "refs/heads/"
+
+
 def attempt_id_from_branch(branch: object) -> str | None:
     """
-    Read the attempt id out of a branch name.
+    Read the attempt id out of a branch name or a branch ref.
 
-    :param branch: A head branch from an event, e.g. ``"wakevane/att-0f3c…"``.
+    :param branch: A head branch from an event, e.g. ``"wakevane/att-0f3c…"``,
+        or a push ref, e.g. ``"refs/heads/wakevane/att-0f3c…"``.
     :returns: The 32-char hex attempt id, or ``None`` for any other branch.
     """
+    if isinstance(branch, str) and branch.startswith(_BRANCH_REF_PREFIX):
+        branch = branch[len(_BRANCH_REF_PREFIX) :]
     if not isinstance(branch, str) or not branch.startswith(ATTEMPT_BRANCH_PREFIX):
         return None
     candidate = branch[len(ATTEMPT_BRANCH_PREFIX) :]

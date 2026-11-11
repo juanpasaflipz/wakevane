@@ -43,14 +43,54 @@ issue opened ──► rung 1 (cheap agent) ──► pushes wakevane/att-<id>, 
 4. A failed attempt starts the next rung in a fresh session. Its prompt names
    the failed check, the earlier branch and the earlier pull request.
 5. An attempt with no verdict after `attempt_timeout_minutes` counts as timed
-   out and escalates the same way.
-6. When the last rung fails, the task stays unsolved. Nothing is merged at any
+   out and escalates the same way. So does an attempt whose session went idle
+   more than five minutes ago without pushing its branch: the agent gave up.
+6. An attempt whose session cannot run ends as `launch_failed` and does not
+   escalate, because it says nothing about the agent: the session failed, was
+   deleted, or has been waiting for an approval for five minutes.
+7. When the last rung fails, the task stays unsolved. Nothing is merged at any
    point; a person reviews and merges the passing pull request.
 
 A ladder runs one task at a time per subject (`issue:42`, `pr:7`), so a second
 event about the same issue while an attempt is running starts nothing.
 
-## Create a ladder
+## Start a ladder in one call
+
+```bash
+curl -X POST https://<your-server>/v1/templates/ladder \
+  -H "authorization: Bearer $OMNIGENT_TOKEN" -H "content-type: application/json" \
+  -d '{
+        "owner": "acme", "repo": "api",
+        "rungs": [
+          {"model": "<small model>", "max_cost_usd": 1},
+          {"model": "<large model>", "max_cost_usd": 8}
+        ],
+        "check_name": "unit"
+      }'
+```
+
+This connects the repository's webhook, installs a fixer agent for it as your
+own agent (`ladder-fixer-<owner>-<repo>`) and creates a ladder that runs that
+fixer once per model, in the order given. It needs GitHub connected in
+Settings and the GitHub App installed on the repository, as for
+[Start a software factory](SUBSCRIPTIONS.md#start-a-software-factory).
+
+The fixer is the software factory's fixer run on its own. It never asks before
+acting, pushes only its own branch, and on managed sandboxes reaches GitHub
+through the credential proxy, so it can clone, push and open a pull request.
+
+| Field | Meaning |
+| --- | --- |
+| `rungs` | One to five steps: `model`, and `max_cost_usd` (default 5) as the spend cap for one attempt. |
+| `trigger_kind` | Event that starts a task. Default `issues.opened`. |
+| `check_name` | The one check whose conclusion is the verdict. Omitted, any check suite on the branch decides. |
+| `attempt_timeout_minutes` | 5 to 1440, default 120. |
+
+Calling it again for the same repository and trigger reinstalls the fixer and
+returns the existing ladder unchanged. To change the steps, delete the ladder
+and call it again.
+
+## Create a ladder by hand
 
 ```bash
 curl -X POST https://<your-server>/v1/ladders \
@@ -73,11 +113,24 @@ curl -X POST https://<your-server>/v1/ladders \
 | `trigger_kind` | Event that starts a task, e.g. `issues.opened` or `check_run.completed`. |
 | `trigger_match` | Optional extra filter on the event's fields, as for a subscription. |
 | `prompt_template` | First message of every attempt. `{repo}`, `{task}`, `{kind}`, `{branch}` and `{fields_json}` are filled in. The branch and verdict instructions are appended for you. |
-| `rungs` | One to five steps, tried in order. Each has an `agent_id` and optionally `model_override`, `max_cost_usd` (spend cap for one attempt) and a `label` for the scoreboard. Rungs may use different agents, so a ladder can mix harnesses. |
+| `rungs` | One to five steps, tried in order. Each has an `agent_id` and optionally `model_override`, `max_cost_usd` (spend cap for one attempt), a `label` for the scoreboard and a `permission_mode`. Rungs may use different agents, so a ladder can mix harnesses. |
 | `verify_kind` | `check_suite.completed` (default) or `check_run.completed`. |
 | `verify_name` | With `check_run.completed`: the one check whose conclusion is the verdict, e.g. `unit`. |
 | `execution_target` | `managed_sandbox` (default) or `connected_host`, with `host_id` / `workspace` as for a launch subscription. |
 | `attempt_timeout_minutes` | 5 to 1440, default 120. |
+
+Nobody is watching an attempt, so its agent must be able to work without
+being asked. Two things decide that:
+
+- **It must not wait for approvals.** A native-harness agent (Claude Code,
+  Codex and the like) starts in its default mode, which asks before acting.
+  Give the rung a `permission_mode` such as `bypassPermissions`, as for a
+  scheduled task. Agents with policies that ask a person have the same
+  problem.
+- **It must have a model login and a way to push.** In a managed sandbox a
+  native-harness agent is not signed in to its provider, and no agent has
+  GitHub credentials unless its spec sets up the credential proxy. The fixer
+  the template installs has both.
 
 Each rung is authorized like a launch subscription: you need to be able to
 start sessions with its agent. Attempts are billed like any other session you
@@ -113,8 +166,12 @@ harder work and is not a general ranking of the agent.
 - **Tests decide.** A repository with weak checks gets weak verdicts. With
   several check suites on a branch, the first conclusion wins; set
   `verify_kind` to `check_run.completed` and name the required check.
-- **Timeouts need traffic.** Stale attempts are swept when a GitHub event
-  arrives or when attempts or the scoreboard are read, not on a timer.
+- **Timeouts need traffic.** Stale attempts and stuck sessions are swept when
+  a GitHub event arrives or when attempts or the scoreboard are read, not on a
+  timer.
+- **Some stuck sessions look busy.** A session that reports itself as running
+  while doing nothing (for example a native agent that is not signed in) is
+  only caught by the timeout.
 - **Cost is read from the session.** It is recorded when the attempt ends and
   refreshed on the scoreboard while the session still exists. Unpriced models
   count as zero.

@@ -61,6 +61,7 @@ def _decode_rungs(raw: str) -> tuple[Rung, ...]:
             model_override=entry.get("model_override"),
             max_cost_usd=entry.get("max_cost_usd"),
             label=entry.get("label"),
+            permission_mode=entry.get("permission_mode"),
         )
         for entry in decoded
         if isinstance(entry, dict) and isinstance(entry.get("agent_id"), str)
@@ -362,11 +363,21 @@ class LadderStore:
             "update_ladder_attempt_pull_request", attempt_id, pull_request=pull_request
         )
 
-    def _update_attempt(self, query_name: str, attempt_id: str, **values: Any) -> None:
+    def note_progress(self, attempt_id: str, detail: str) -> None:
+        """Record on a running attempt that its work reached the repository."""
+        self._update_attempt(
+            "update_ladder_attempt_progress", attempt_id, only_running=True, detail=detail[:1024]
+        )
+
+    def _update_attempt(
+        self, query_name: str, attempt_id: str, *, only_running: bool = False, **values: Any
+    ) -> None:
         def write(session: Session) -> None:
-            session.execute(
-                update(SqlLadderAttempt).where(SqlLadderAttempt.id == attempt_id).values(**values)
-            )
+            stmt = update(SqlLadderAttempt).where(SqlLadderAttempt.id == attempt_id)
+            if only_running:
+                # A late event must not overwrite why a finished attempt ended.
+                stmt = stmt.where(SqlLadderAttempt.status == AttemptStatus.RUNNING.value)
+            session.execute(stmt.values(**values))
 
         run_write_transaction(self._session_immediate, query_name, write)
 
