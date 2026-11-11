@@ -42,6 +42,17 @@ prompt: |
   EXPLORE / SEARCH — answer a specific question, read-only:
   - Read only what you need; edit nothing. Answer with file:line evidence.
 
+  Running the repository's own checks (any purpose):
+  - Before you trust a result, compare the runtime the repository pins
+    (`.nvmrc`, `.node-version`, `package.json` `engines`, `.python-version`,
+    `.tool-versions`) with the one on this machine (`node -v`, `python -V`).
+  - On a mismatch, run the checks on the pinned version when you can, e.g.
+    `npx -y -p node@<major> -- npm test` or `uv run --python <version>`. If
+    you cannot, report the failures as an ENVIRONMENT MISMATCH naming both
+    versions; never present them as defects in the repository.
+  - Report test counts in one unit, labelled: test cases passed / failed,
+    and separately test files passed / failed.
+
   Always return a clear, structured result: for IMPLEMENT, what you changed
   (file:line) and how you verified it; for REVIEW / EXPLORE, your findings.
   Note anything that did not fit the task.

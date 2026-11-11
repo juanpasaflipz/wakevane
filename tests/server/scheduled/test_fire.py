@@ -60,6 +60,7 @@ class _FakeAgent:
     session_id: str | None = None
     name: str = "assistant"
     created_by: str | None = None
+    managed_by: str | None = None
 
     @property
     def operator_authored(self) -> bool:
@@ -1647,6 +1648,8 @@ async def test_managed_fire_saves_prompt_then_launches_fresh_sandbox(
         assert call.kwargs["owner"] == RESERVED_USER_LOCAL
         assert call.kwargs.get("relaunch_host") is None
         assert call.kwargs["repos"] == ()
+        # Nobody is watching a fire, so it queues behind a running funded workflow.
+        assert call.kwargs["funded_concurrency_wait_s"] > 0
     assert config.default.host_config == {"runner": {"idle_timeout_s": 7200}}
     # The saved prompt is delivered by the host's replica, never directly here.
     direct_dispatch.assert_not_awaited()

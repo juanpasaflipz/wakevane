@@ -80,6 +80,7 @@ const FAILURE_CODE_DESCRIPTIONS: Record<string, string> = {
     "The agent's terminal exited unexpectedly, so the session can't continue.",
   terminal_launch_failed: "The agent's terminal couldn't be started on the host.",
   runner_error: "Something went wrong setting up the turn on the host.",
+  launch_failed: "This session couldn't start, so the message was not delivered.",
   runner_disconnected: "The connection to the host dropped unexpectedly.",
   runner_unavailable: "The session's runner isn't connected to the server.",
   connection_error:

@@ -29,6 +29,17 @@ def test_polly_preflight_uses_readiness_true_filter() -> None:
         assert state in lowered
 
 
+def test_polly_preflight_treats_needs_auth_as_launchable() -> None:
+    # The host cannot see session-supplied credentials, so its auth report is advisory.
+    prompt = " ".join(_polly_prompt().split())
+    available = prompt[prompt.index("A worker is AVAILABLE") :]
+    launchable, blocked = available.split("mean it cannot boot", 1)[0].split("fail loud", 1)
+    assert '"needs-auth"' in launchable
+    assert '"needs-auth"' not in blocked
+    for state in ("`false`", '"binary-missing"', '"version-too-low"'):
+        assert state in blocked
+
+
 def test_polly_preflight_readiness_map_is_primary_gate() -> None:
     prompt = _polly_prompt()
     readiness_pos = prompt.index("configured_harnesses")
@@ -43,3 +54,18 @@ def test_polly_preflight_defines_no_host_fallback() -> None:
     prompt = " ".join(_polly_prompt().lower().split())
     assert "absent" in prompt or "null" in prompt
     assert "fall back" in prompt
+
+
+def test_polly_workers_report_runtime_mismatch_not_repository_defects() -> None:
+    worker_configs = sorted((_POLLY / "agents").glob("*/config.yaml"))
+    assert worker_configs
+    for path in worker_configs:
+        prompt = yaml.safe_load(path.read_text(encoding="utf-8"))["prompt"]
+        assert "ENVIRONMENT MISMATCH" in prompt, path
+        assert "`.nvmrc`" in prompt and "`engines`" in prompt, path
+
+
+def test_polly_names_the_models_claude_code_can_run_unattended() -> None:
+    prompt = " ".join(_polly_prompt().split())
+    assert "Unattended approvals." in prompt
+    assert "Haiku 5.5 or later" in prompt and "`args.model`" in prompt

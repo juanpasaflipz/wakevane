@@ -16,6 +16,7 @@ dict here, so every formula is unit-testable from a plain dict.
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -174,22 +175,41 @@ def counters_from_bucket(bucket: Mapping[str, Any]) -> TokenCounters:
     )
 
 
+# A dated Claude snapshot id, e.g. ``claude-haiku-4-5-20251001``.
+_CLAUDE_SNAPSHOT_ID_RE = re.compile(r"(claude-.+)-\d{8}")
+
+
+def scorecard_model_id(model_id: str) -> str:
+    """
+    Name a model the way the scorecard groups it.
+
+    Harnesses report the same Claude model under its alias or its dated
+    snapshot id; the scorecard counts both as the alias.
+
+    :param model_id: A reported id, e.g. ``"claude-haiku-4-5-20251001"``.
+    :returns: The alias (``"claude-haiku-4-5"``), or *model_id* unchanged.
+    """
+    snapshot = _CLAUDE_SNAPSHOT_ID_RE.fullmatch(model_id)
+    return snapshot.group(1) if snapshot else model_id
+
+
 def model_counters_from_usage(usage: Mapping[str, Any]) -> dict[str, TokenCounters]:
     """
     Read every well-formed ``by_model`` bucket of a usage dict.
 
     :param usage: A subtree-summed ``session_usage`` dict.
-    :returns: ``{model_id: counters}``; empty when there is no per-model
-        breakdown. Non-dict buckets (malformed persisted data) are skipped.
+    :returns: ``{model_id: counters}`` keyed by :func:`scorecard_model_id`;
+        empty when there is no per-model breakdown. Non-dict buckets
+        (malformed persisted data) are skipped.
     """
     by_model = usage.get("by_model")
     if not isinstance(by_model, Mapping):
         return {}
-    return {
-        str(model_id): counters_from_bucket(bucket)
-        for model_id, bucket in by_model.items()
-        if isinstance(bucket, Mapping)
-    }
+    merged: dict[str, TokenCounters] = defaultdict(TokenCounters)
+    for model_id, bucket in by_model.items():
+        if isinstance(bucket, Mapping):
+            merged[scorecard_model_id(str(model_id))] += counters_from_bucket(bucket)
+    return dict(merged)
 
 
 def counters_from_usage(usage: Mapping[str, Any]) -> TokenCounters:

@@ -605,6 +605,7 @@ def test_compaction_model_failure_code_survives_its_budget_text() -> None:
         ("required_terminal_exited", "terminal exited"),
         ("terminal_launch_failed", "couldn't be started"),
         ("runner_error", "setting up the turn"),
+        ("launch_failed", "couldn't start"),
         ("runner_disconnected", "host dropped"),
         ("connection_error", "connection"),
         ("context_length_exceeded", "context window"),

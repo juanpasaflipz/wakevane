@@ -1424,6 +1424,11 @@ def _make_connected_host_preflight(deps: FireDeps) -> ConnectedHostPreflight:
     return _preflight
 
 
+# How long an unattended launch stays queued behind the account's running
+# funded workflow before it is recorded as failed.
+_FUNDED_CONCURRENCY_WAIT_S = 30 * 60.0
+
+
 def _new_id() -> str:
     """A bare 32-char hex UUID, matching the store's id convention."""
     return uuid.uuid4().hex
@@ -1575,6 +1580,7 @@ def _make_managed_sandbox_start(deps: FireDeps) -> ManagedLaunchStart:
                     provider=None,
                     agent_store=deps.agent_store,
                     agent_id=task.agent_id,
+                    funded_concurrency_wait_s=_FUNDED_CONCURRENCY_WAIT_S,
                 )
             except Exception as exc:
                 await _fail_running_run(
