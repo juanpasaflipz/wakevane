@@ -212,3 +212,27 @@ async def test_delivery_failure_is_logged_not_raised_and_others_still_deliver(
 async def test_publish_with_no_subscriptions_returns_zero_counts() -> None:
     bus = EventBus(FakeSubscriptionStore([]), RecordingDelivery())
     assert await bus.publish(_event()) == PublishResult()
+
+
+@pytest.mark.asyncio
+async def test_listeners_see_every_event_and_a_failing_one_is_isolated(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    seen: list[str] = []
+
+    async def broken(event: CanonicalEvent) -> None:
+        raise RuntimeError("listener exploded")
+
+    async def recording(event: CanonicalEvent) -> None:
+        seen.append(event.kind)
+
+    bus = EventBus(FakeSubscriptionStore([]), RecordingDelivery(), listeners=[broken])
+    bus.add_listener(recording)
+
+    with caplog.at_level("ERROR", logger="omnigent.server.events.bus"):
+        result = await bus.publish(_event())
+
+    # No subscription matched, yet the listeners still ran.
+    assert result == PublishResult()
+    assert seen == [_event().kind]
+    assert any("listener failed" in record.getMessage() for record in caplog.records)

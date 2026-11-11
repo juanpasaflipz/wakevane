@@ -35,6 +35,7 @@ class Feature(StrEnum):
     SUBSCRIPTIONS = "subscriptions"
     SHIMS_PAGE = "shims_page"
     SUBSCRIPTIONS_PAGE = "subscriptions_page"
+    LADDERS = "ladders"
     EGM_TEMPLATE = "egm_template"
     FUNDED_TRIAL = "funded_trial"
     EGM_CLOUD = "egm_cloud"
@@ -148,6 +149,16 @@ FEATURE_DEFINITIONS: tuple[FeatureDefinition, ...] = (
         default_enabled=True,
     ),
     FeatureDefinition(
+        feature=Feature.LADDERS,
+        description=(
+            "Ladders: /v1/ladders routes that work a repository event with agents "
+            "cheapest first, judged by the repository's checks, with a scoreboard"
+        ),
+        owner="server",
+        review_by_release="0.24.0",
+        frontend_visible=False,
+    ),
+    FeatureDefinition(
         feature=Feature.SHIMS_PAGE,
         description="Web Shims page listing registered shims, their firings and retirability",
         owner="web",
@@ -165,7 +176,7 @@ FEATURE_DEFINITIONS: tuple[FeatureDefinition, ...] = (
         feature=Feature.EGM_CLOUD,
         description="Design review in a managed cloud sandbox pinned to an exact commit",
         owner="server",
-        review_by_release="0.26.0",
+        review_by_release="0.24.0",
     ),
     FeatureDefinition(
         feature=Feature.EGM_CLOUD_CODING,
@@ -174,7 +185,7 @@ FEATURE_DEFINITIONS: tuple[FeatureDefinition, ...] = (
             "open a pull request"
         ),
         owner="server",
-        review_by_release="0.26.0",
+        review_by_release="0.24.0",
     ),
     FeatureDefinition(
         feature=Feature.FUNDED_TRIAL,
@@ -182,7 +193,7 @@ FEATURE_DEFINITIONS: tuple[FeatureDefinition, ...] = (
             "Global kill switch for service-funded trial grants; grants still apply per account"
         ),
         owner="server",
-        review_by_release="0.26.0",
+        review_by_release="0.24.0",
         # Clients read effective capabilities from the trial route, never this flag.
         frontend_visible=False,
     ),

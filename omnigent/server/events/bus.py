@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -41,6 +41,10 @@ DEFAULT_COOLDOWN_SECONDS = 10
 #: subscription (which carries the conversation, owner and workspace) and the
 #: notice text. Errors are logged by the bus and never propagate.
 WakeDelivery = Callable[[Subscription, str], Awaitable[None]]
+
+#: Sees every published event after subscriptions were served. Errors are
+#: logged by the bus and never propagate.
+EventListener = Callable[["CanonicalEvent"], Awaitable[None]]
 
 #: Launches a fresh session for a launch subscription. Takes the subscription
 #: (owner, agent, execution target, cost cap) and the rendered first user
@@ -157,6 +161,29 @@ def _fields_json(event: CanonicalEvent) -> str:
     return payload
 
 
+def render_template(template: str, values: dict[str, str]) -> str:
+    """
+    Fill ``{placeholder}`` fields in a stored prompt template.
+
+    Unknown placeholders stay literal, and a template ``str.format`` cannot
+    parse (a stray ``{`` or an attribute/index lookup) is returned unchanged
+    rather than failing the launch.
+
+    :param template: The stored template, e.g. ``"Fix {repo} issue {task}"``.
+    :param values: Placeholder values, e.g. ``{"repo": "acme/api"}``.
+    :returns: The rendered text.
+    """
+    try:
+        return template.format_map(_TemplateValues(values))
+    except (ValueError, KeyError, IndexError, AttributeError, TypeError):
+        return template
+
+
+def event_fields_json(event: CanonicalEvent) -> str:
+    """Compact, sorted JSON of an event's fields, bounded like a wake notice."""
+    return _fields_json(event)
+
+
 def render_prompt_template(
     template: str, event: CanonicalEvent, subscription: Subscription
 ) -> str:
@@ -174,17 +201,16 @@ def render_prompt_template(
     :param subscription: The subscription it matched.
     :returns: The rendered text.
     """
-    values = _TemplateValues(
-        source=event.source,
-        kind=event.kind,
-        subscription_id=subscription.id,
-        note=subscription.note or "",
-        fields_json=_fields_json(event),
+    return render_template(
+        template,
+        {
+            "source": event.source,
+            "kind": event.kind,
+            "subscription_id": subscription.id,
+            "note": subscription.note or "",
+            "fields_json": _fields_json(event),
+        },
     )
-    try:
-        return template.format_map(values)
-    except (ValueError, KeyError, IndexError, AttributeError, TypeError):
-        return template
 
 
 def format_launch_prompt(event: CanonicalEvent, subscription: Subscription) -> str:
@@ -218,6 +244,7 @@ class EventBus:
     :param cooldown_seconds: Minimum seconds between two deliveries to the same
         subscription; matches inside the window are counted as suppressed.
     :param clock: Epoch-seconds source, injectable for tests.
+    :param listeners: Other consumers handed every published event.
     """
 
     def __init__(
@@ -228,12 +255,18 @@ class EventBus:
         launch: SessionLaunch | None = None,
         cooldown_seconds: int = DEFAULT_COOLDOWN_SECONDS,
         clock: Callable[[], float] = time.time,
+        listeners: Sequence[EventListener] = (),
     ) -> None:
         self._store = store
         self._deliver = deliver
         self._launch = launch
         self._cooldown_seconds = cooldown_seconds
         self._clock = clock
+        self._listeners = list(listeners)
+
+    def add_listener(self, listener: EventListener) -> None:
+        """Hand every later published event to ``listener`` as well."""
+        self._listeners.append(listener)
 
     async def publish(self, event: CanonicalEvent) -> PublishResult:
         """
@@ -276,6 +309,11 @@ class EventBus:
                 )
                 continue
             delivered += 1
+        for listener in self._listeners:
+            try:
+                await listener(event)
+            except Exception:
+                _logger.exception("Event listener failed for %s/%s", event.source, event.kind)
         return PublishResult(matched=matched, delivered=delivered, suppressed=suppressed)
 
     async def _launch_session(self, event: CanonicalEvent, subscription: Subscription) -> bool:

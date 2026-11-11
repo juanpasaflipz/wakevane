@@ -45,7 +45,7 @@ Each delivery is normalized into a `kind` and a flat `fields` dict:
 | `issue_comment` / `created` | `issue_comment.created` |
 | `push` | `push` |
 
-`fields` carries whichever of these the payload has: `repo` (`owner/name`), `action`, `conclusion`, `status`, `name` (the check's name), `pull_request` (number; the first when a check lists several), `issue` (number), `sender` (login), `ref`, and `url` (the subject's `html_url`). Nothing else from the payload is kept, so a filter can only name these keys.
+`fields` carries whichever of these the payload has: `repo` (`owner/name`), `action`, `conclusion`, `status`, `name` (the check's name), `pull_request` (number; the first when a check lists several), `issue` (number), `head_branch` (the branch a pull request or check ran on), `sender` (login), `ref`, and `url` (the subject's `html_url`). Nothing else from the payload is kept, so a filter can only name these keys.
 
 ## From the web UI
 

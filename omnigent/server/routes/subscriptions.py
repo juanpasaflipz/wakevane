@@ -18,7 +18,6 @@ agent (and pinned host/workspace) that creating a scheduled task does.
 
 from __future__ import annotations
 
-import asyncio
 import re
 import uuid
 from typing import Any
@@ -27,17 +26,11 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from omnigent.entities import Subscription, SubscriptionState
-from omnigent.entities.subscription import SUBSCRIPTION_EXECUTION_TARGETS, SUBSCRIPTION_SOURCES
+from omnigent.entities.subscription import SUBSCRIPTION_SOURCES
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.server.auth import LEVEL_EDIT, RESERVED_USER_LOCAL, AuthProvider
-from omnigent.server.bundles import agent_for_user
 from omnigent.server.routes._auth_helpers import require_access, require_user
-from omnigent.server.routes._host_launch import resolve_host_owner
-from omnigent.server.routes._session_create_validation import (
-    validate_existing_host_workspace,
-    validate_session_agent,
-    validate_session_model_metadata,
-)
+from omnigent.server.routes._launch_target import validate_launch_target
 from omnigent.stores import AgentStore, ConversationStore, PermissionStore
 from omnigent.stores.artifact_store import ArtifactStore
 from omnigent.stores.subscription_store import SubscriptionStore
@@ -192,13 +185,6 @@ def create_subscriptions_router(
     ) -> tuple[str, str | None, str | None]:
         """Authorize and normalize a launch subscription's target.
 
-        Mirrors scheduled-task create: the caller must be able to start
-        sessions with the agent, a pinned host must be theirs (and not an
-        existing sandbox), a pinned workspace needs a host and is validated
-        against the agent's boundary, and ``managed_sandbox`` needs a server
-        that can provision sandboxes. Another user's agent is copied for the
-        owner, as for a scheduled task.
-
         :returns: ``(agent_id, workspace, model_override)`` to persist.
         """
         if agent_store is None:
@@ -210,75 +196,20 @@ def create_subscriptions_router(
             raise OmnigentError(
                 "prompt_template is required with agent_id", code=ErrorCode.INVALID_INPUT
             )
-        execution_target = body.execution_target or "connected_host"
-        if execution_target not in SUBSCRIPTION_EXECUTION_TARGETS:
-            raise OmnigentError(
-                "execution_target must be 'connected_host' or 'managed_sandbox'",
-                code=ErrorCode.INVALID_INPUT,
-            )
-        agent = await validate_session_agent(
-            user_id=owner_id,
+        return await validate_launch_target(
+            request,
+            owner_id=owner_id,
             agent_id=body.agent_id or "",
+            execution_target=body.execution_target or "connected_host",
+            host_id=body.host_id,
+            workspace=body.workspace,
+            model_override=body.model_override,
             agent_store=agent_store,
-            permission_store=permission_store,
             conversation_store=conversation_store,
-            egm_new_work=True,
+            permission_store=permission_store,
+            agent_cache=agent_cache,
+            artifact_store=artifact_store,
         )
-        model_override, _ = validate_session_model_metadata(
-            model_override=body.model_override, reasoning_effort=None
-        )
-        workspace: str | None = None
-        if execution_target == "managed_sandbox":
-            if body.host_id is not None or body.workspace is not None:
-                raise OmnigentError(
-                    "a managed_sandbox subscription runs in a fresh sandbox per event; "
-                    "do not set host_id or workspace",
-                    code=ErrorCode.INVALID_INPUT,
-                )
-            sandbox_config = getattr(request.app.state, "sandbox_config", None)
-            if sandbox_config is None or not sandbox_config.managed_launch_supported:
-                raise OmnigentError(
-                    "managed sandboxes are not configured on this server",
-                    code=ErrorCode.INVALID_INPUT,
-                )
-        else:
-            host_store = getattr(request.app.state, "host_store", None)
-            if body.host_id is not None and host_store is not None:
-                host = await asyncio.to_thread(
-                    resolve_host_owner,
-                    user_id=owner_id,
-                    host_id=body.host_id,
-                    host_store=host_store,
-                )
-                if host.sandbox_provider is not None:
-                    raise OmnigentError(
-                        "subscriptions cannot use an existing sandbox; "
-                        "select a new sandbox for each run",
-                        code=ErrorCode.INVALID_INPUT,
-                    )
-            if body.workspace is not None:
-                if body.host_id is None:
-                    raise OmnigentError(
-                        "host_id required when workspace is set", code=ErrorCode.INVALID_INPUT
-                    )
-                workspace = await validate_existing_host_workspace(
-                    user_id=owner_id,
-                    host_id=body.host_id,
-                    workspace=body.workspace,
-                    agent=agent,
-                    agent_cache=agent_cache,
-                    host_store=host_store,
-                    host_registry=getattr(request.app.state, "host_registry", None),
-                )
-        if agent.managed_by == "egm-template":
-            from omnigent.server.egm import require_egm_target
-
-            require_egm_target(body.host_id, workspace, execution_target)
-            return agent.id, workspace, model_override
-        bound = await asyncio.to_thread(
-            agent_for_user, agent_store, artifact_store, agent, owner_id
-        )
-        return bound.id, workspace, model_override
 
     def _owner(request: Request) -> str:
         """Resolve the calling user, mapping the auth-disabled case to

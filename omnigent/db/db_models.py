@@ -1945,6 +1945,124 @@ class SqlScheduledTaskRun(OmnigentBase):
     )
 
 
+class SqlLadder(OmnigentBase):
+    """
+    SQLAlchemy model for the ``ladders`` table.
+
+    A ladder turns one kind of repository event into a task and works it with
+    an ordered list of agents ("rungs"), cheapest first. Each attempt is
+    judged by the repository's own checks; a failed attempt hands the task to
+    the next rung.
+
+    :param repo: Repository the ladder watches, e.g. ``"acme/api"``.
+    :param trigger_kind: Event kind that starts a task, e.g. ``"issues.opened"``.
+    :param trigger_match: Extra field filter as JSON object text.
+    :param rungs: JSON array text of ``{agent_id, model_override, max_cost_usd,
+        label}`` objects, first rung first.
+    :param verify_kind: Check event that judges an attempt, e.g.
+        ``"check_suite.completed"``.
+    :param verify_name: Check name the verdict is read from, or ``None`` for
+        any check of ``verify_kind``.
+    """
+
+    __tablename__ = "ladders"
+
+    # Tenant partition key: Databricks workspace id owning this row (0 = default). Part of the PK.
+    workspace_id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        nullable=False,
+        server_default="0",
+        default=current_workspace_id,
+    )
+    id: Mapped[str] = mapped_column(Uuid16, primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    account_generation: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    repo: Mapped[str] = mapped_column(String(256), nullable=False)
+    trigger_kind: Mapped[str] = mapped_column(String(128), nullable=False)
+    trigger_match: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    prompt_template: Mapped[str] = mapped_column(Text, nullable=False)
+    rungs: Mapped[str] = mapped_column(Text, nullable=False)
+    verify_kind: Mapped[str] = mapped_column(String(128), nullable=False)
+    verify_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    execution_target: Mapped[str] = mapped_column(String(32), nullable=False)
+    host_id: Mapped[str | None] = mapped_column(Uuid16, nullable=True)
+    workspace: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    attempt_timeout_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[str] = mapped_column(String(16), nullable=False, server_default="active")
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    updated_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("state IN ('active', 'paused', 'deleted')", name="ck_ladders_state"),
+        # The engine reads active ladders by trigger kind on every event.
+        Index("ix_ladders_active_lookup", "state", "trigger_kind"),
+        Index("ix_ladders_user_scope", "workspace_id", "user_id", "created_at", "id"),
+    )
+
+
+class SqlLadderAttempt(OmnigentBase):
+    """
+    SQLAlchemy model for the ``ladder_attempts`` table.
+
+    One row per session a ladder started. Attempts that share a ``task_id``
+    are successive rungs on the same triggering event.
+
+    :param task_key: What the task is about inside the repository, e.g.
+        ``"issue:42"``; a ladder runs one task per key at a time.
+    :param rung_index: Zero-based position of the rung that ran.
+    :param model: Model that spent the most in the session, read at the verdict.
+    :param status: ``running``, ``passed``, ``failed``, ``timed_out`` or
+        ``launch_failed``.
+    :param detail: Why the attempt ended, e.g. the failing check's name and URL.
+    :param cost_usd: Session cost read when the attempt ended.
+    """
+
+    __tablename__ = "ladder_attempts"
+
+    # Tenant partition key: Databricks workspace id owning this row (0 = default). Part of the PK.
+    workspace_id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        nullable=False,
+        server_default="0",
+        default=current_workspace_id,
+    )
+    id: Mapped[str] = mapped_column(Uuid16, primary_key=True)
+    # Relates to ladders.id. No DB foreign key (Rule R032).
+    ladder_id: Mapped[str] = mapped_column(Uuid16, nullable=False)
+    task_id: Mapped[str] = mapped_column(Uuid16, nullable=False)
+    user_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    repo: Mapped[str] = mapped_column(String(256), nullable=False)
+    task_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    rung_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Relates to agents.id / conversations.id. No DB foreign keys (Rule R032).
+    agent_id: Mapped[str] = mapped_column(Uuid16, nullable=False)
+    model_override: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    conversation_id: Mapped[str | None] = mapped_column(Uuid16, nullable=True)
+    pull_request: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    detail: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    # JSON object text of the triggering event's fields, replayed to later rungs.
+    event_fields: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    started_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    finished_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('running', 'passed', 'failed', 'timed_out', 'launch_failed')",
+            name="ck_ladder_attempts_status",
+        ),
+        # The engine sweeps running attempts on every event.
+        Index("ix_ladder_attempts_status", "status", "started_at"),
+        Index("ix_ladder_attempts_ladder", "workspace_id", "ladder_id", "started_at", "id"),
+        Index("ix_ladder_attempts_user_scope", "workspace_id", "user_id", "started_at", "id"),
+    )
+
+
 class SqlSubscription(OmnigentBase):
     """
     SQLAlchemy model for the ``subscriptions`` table.

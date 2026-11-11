@@ -172,3 +172,8 @@ def test_release_flags_have_lifecycle_metadata_and_expected_defaults() -> None:
         assert definition.review_by_release
         assert defaults.enabled(definition.feature) == definition.default_enabled
     assert FeatureFlags().enabled_features == frozenset()
+
+
+def test_ladders_are_opt_in() -> None:
+    assert not resolve_feature_flags({}).enabled(Feature.LADDERS)
+    assert resolve_feature_flags({"OMNIGENT_FEATURES": "ladders"}).enabled(Feature.LADDERS)

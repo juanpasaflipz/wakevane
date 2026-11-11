@@ -3860,6 +3860,21 @@ def create_app(
                 prefix="/v1",
                 tags=["templates"],
             )
+            # Ladders consume the same event stream, so they need the bus.
+            if resolved_feature_flags.enabled(Feature.LADDERS) and agent_store is not None:
+                from omnigent.server.ladders.wiring import mount_ladders
+
+                mount_ladders(
+                    app,
+                    event_bus,
+                    storage_location=subscription_store.storage_location,
+                    conversation_store=conversation_store,
+                    agent_store=agent_store,
+                    permission_store=permission_store,
+                    auth_provider=auth_provider,
+                    agent_cache=agent_cache,
+                    artifact_store=artifact_store,
+                )
     # Admin control for the server-wide sharing settings. Always mounted (the
     # handlers self-gate on admin); PUT is a no-op-reject unless this server
     # resolves the setting from the editable file-backed default.
