@@ -109,11 +109,51 @@ class WelcomeGrant:
         )
 
 
+def _pricing_per_token(prices: Mapping[str, Any]) -> ModelPricing:
+    """Convert operator prices in USD per million tokens to per-token prices."""
+    return ModelPricing(
+        input_per_token=float(prices["input"]) / 1_000_000,
+        output_per_token=float(prices["output"]) / 1_000_000,
+        cache_read_per_token=float(prices["cache_read"]) / 1_000_000,
+        cache_write_per_token=float(prices["cache_write"]) / 1_000_000,
+    )
+
+
+def _prompt_tokens(usage: Mapping[str, Any]) -> int:
+    """Everything the model read for one request: fresh input plus cache reads and writes."""
+    return sum(
+        int(usage.get(key) or 0)
+        for key in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+    )
+
+
+@dataclass(frozen=True)
+class LongPromptPricing:
+    """The dearer tier an upstream charges for a request with a long prompt.
+
+    :param over_tokens: Prompt size above which the tier applies, e.g. ``100000``.
+    :param pricing: Per-token prices for such a request.
+    """
+
+    over_tokens: int
+    pricing: ModelPricing
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, Any]) -> LongPromptPricing:
+        """Parse ``{"over_tokens": 100000, "input": ..., ...}``; prices are USD per million."""
+        over_tokens = int(raw["over_tokens"])
+        if over_tokens <= 0:
+            raise ValueError("long_prompt over_tokens must be positive")
+        return cls(over_tokens=over_tokens, pricing=_pricing_per_token(raw))
+
+
 @dataclass(frozen=True)
 class FundedTrialConfig:
     """Operator-approved prices and limits; absent entries are unpriced.
 
     :param model_pricing: Model id → per-token prices for the gateway upstream.
+    :param long_prompt_pricing: Model id → the dearer tier the upstream
+        charges once a request's prompt passes a token threshold.
     :param compute_usd_per_hour: Sandbox provider → hourly price.
     :param max_output_tokens: Upper bound enforced on every gateway request.
     :param max_request_bytes: Upper bound on a gateway request body.
@@ -126,6 +166,7 @@ class FundedTrialConfig:
     """
 
     model_pricing: Mapping[str, ModelPricing] = field(default_factory=dict)
+    long_prompt_pricing: Mapping[str, LongPromptPricing] = field(default_factory=dict)
     compute_usd_per_hour: Mapping[str, float] = field(default_factory=dict)
     max_output_tokens: int = 16_000
     max_request_bytes: int = 2_000_000
@@ -139,14 +180,11 @@ class FundedTrialConfig:
     def from_mapping(cls, raw: Mapping[str, Any]) -> FundedTrialConfig:
         """Parse operator JSON; prices are USD per million tokens."""
         models: dict[str, ModelPricing] = {}
+        long_prompts: dict[str, LongPromptPricing] = {}
         for model, prices in (raw.get("models") or {}).items():
-            input_price = float(prices["input"])
-            models[str(model)] = ModelPricing(
-                input_per_token=input_price / 1_000_000,
-                output_per_token=float(prices["output"]) / 1_000_000,
-                cache_read_per_token=float(prices["cache_read"]) / 1_000_000,
-                cache_write_per_token=float(prices["cache_write"]) / 1_000_000,
-            )
+            models[str(model)] = _pricing_per_token(prices)
+            if prices.get("long_prompt"):
+                long_prompts[str(model)] = LongPromptPricing.from_mapping(prices["long_prompt"])
         compute = {
             str(provider): float(rate)
             for provider, rate in (raw.get("compute_usd_per_hour") or {}).items()
@@ -156,6 +194,7 @@ class FundedTrialConfig:
         defaults = cls()
         return cls(
             model_pricing=models,
+            long_prompt_pricing=long_prompts,
             compute_usd_per_hour=compute,
             max_output_tokens=int(raw.get("max_output_tokens", defaults.max_output_tokens)),
             max_request_bytes=int(raw.get("max_request_bytes", defaults.max_request_bytes)),
@@ -184,21 +223,36 @@ class FundedTrialConfig:
         """Conservative maximum cost of one Messages request.
 
         Every request byte is priced as a token at the dearest input rate,
-        which bounds text, cache writes and images from above.
+        which bounds text, cache writes and images from above. The prompt
+        size is unknown before the upstream counts it, so a model with a
+        long-prompt tier is held at whichever tier is dearer.
         """
-        pricing = self.model_pricing[model]
+        tiers = [self.model_pricing[model]]
+        long_prompt = self.long_prompt_pricing.get(model)
+        if long_prompt is not None:
+            tiers.append(long_prompt.pricing)
         dearest_input = max(
-            pricing.input_per_token,
-            pricing.cache_write_per_token or 0.0,
-            pricing.cache_read_per_token or 0.0,
+            max(
+                pricing.input_per_token,
+                pricing.cache_write_per_token or 0.0,
+                pricing.cache_read_per_token or 0.0,
+            )
+            for pricing in tiers
         )
-        return _usd_to_micros(
-            request_bytes * dearest_input + max_tokens * pricing.output_per_token
-        )
+        dearest_output = max(pricing.output_per_token for pricing in tiers)
+        return _usd_to_micros(request_bytes * dearest_input + max_tokens * dearest_output)
 
     def inference_cost_micros(self, model: str, usage: Mapping[str, Any]) -> int:
-        """Measured cost from provider-reported Anthropic usage."""
-        return _usd_to_micros(compute_llm_cost(dict(usage), self.model_pricing[model]))
+        """Measured cost from provider-reported Anthropic usage.
+
+        The whole request is billed at the long-prompt tier once its prompt
+        (fresh input plus cache reads and writes) passes that tier's threshold.
+        """
+        pricing = self.model_pricing[model]
+        long_prompt = self.long_prompt_pricing.get(model)
+        if long_prompt is not None and _prompt_tokens(usage) > long_prompt.over_tokens:
+            pricing = long_prompt.pricing
+        return _usd_to_micros(compute_llm_cost(dict(usage), pricing))
 
     def compute_hold_micros(self, provider: str, hours: float) -> int:
         """Reservation for a bounded cloud lifetime."""

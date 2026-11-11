@@ -45,6 +45,7 @@ the `omnigent` and `omni` commands still work, and settings keep their
 | Polly example | The roster preflight treats `needs-auth` as launchable (a session can supply the credential); workers check the repository's pinned runtime before trusting its checks and report a mismatch as such; the orchestrator is told which models let `claude_code` run without approval prompts. |
 | Efficiency scorecard | A dated Claude snapshot id is counted under its alias. |
 | Web UI | The settings Admin group appears on a direct load of a settings URL; settings copy uses the configured app name; the Subscriptions repository picker has a filter for long lists; a failed launch has its own headline. |
+| Funded gateway pricing | A priced model may carry a `long_prompt` tier; a request whose prompt passes the tier's token threshold is billed at that tier, and holds use the dearer tier. |
 | Docs | Subscriptions, shims, efficiency, credential encryption, Railway, GitHub App setup, and feature-flag inventory updated for the above. |
 
 - Added default-off `egm_template` Design review entry, durable template ownership, immutable run snapshots, and connected-host preflight. Deployment requires migration and coordinated writer upgrade; see `examples/egm/README.md`.
