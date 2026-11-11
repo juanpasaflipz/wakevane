@@ -561,3 +561,68 @@ async def test_trial_launch_without_inference_releases_its_compute_hold(
         launch_id="2",
     )
     assert unchanged.deployment is operator and unchanged.charge is None
+
+
+_TIERED = FundedTrialConfig.from_mapping(
+    {
+        "models": {
+            "tiered": {
+                "input": 0.1,
+                "output": 0.5,
+                "cache_read": 0.01,
+                "cache_write": 0.2,
+                "long_prompt": {
+                    "over_tokens": 100_000,
+                    "input": 0.5,
+                    "output": 2.5,
+                    "cache_read": 0.05,
+                    "cache_write": 1,
+                },
+            },
+            "flat": {"input": 1, "output": 5, "cache_read": 0.1, "cache_write": 2},
+        }
+    }
+)
+
+
+@pytest.mark.parametrize(
+    ("usage", "expected_micros"),
+    [
+        # 100,000 prompt tokens is still the base tier: 90k cached + 10k fresh + 1k out.
+        (
+            {"input_tokens": 10_000, "cache_read_input_tokens": 90_000, "output_tokens": 1_000},
+            900 + 1_000 + 500,
+        ),
+        # One token past the threshold bills the whole request at the long-prompt tier.
+        (
+            {"input_tokens": 10_001, "cache_read_input_tokens": 90_000, "output_tokens": 1_000},
+            4_500 + 5_001 + 2_500,
+        ),
+        # Cache writes count toward the prompt size too.
+        (
+            {"input_tokens": 1, "cache_creation_input_tokens": 100_000, "output_tokens": 0},
+            100_000 + 1,
+        ),
+    ],
+)
+def test_long_prompt_tier_bills_by_measured_prompt_size(
+    usage: dict[str, int], expected_micros: int
+) -> None:
+    assert _TIERED.inference_cost_micros("tiered", usage) == expected_micros
+
+
+def test_long_prompt_tier_leaves_flat_models_and_holds_at_the_dearer_tier() -> None:
+    long_usage = {"input_tokens": 200_000, "output_tokens": 1_000}
+    assert _TIERED.inference_cost_micros("flat", long_usage) == 200_000 + 5_000
+    assert "flat" not in _TIERED.long_prompt_pricing
+    # The prompt size is unknown before the upstream counts it, so hold the dearer tier.
+    assert _TIERED.inference_hold_micros("tiered", 1_000, 1_000) == 1_000 + 2_500
+    assert sorted(_TIERED.model_pricing) == ["flat", "tiered"]
+
+
+def test_long_prompt_tier_rejects_a_non_positive_threshold() -> None:
+    prices = {"input": 1, "output": 1, "cache_read": 1, "cache_write": 1}
+    with pytest.raises(ValueError, match="over_tokens"):
+        FundedTrialConfig.from_mapping(
+            {"models": {"m": {**prices, "long_prompt": {**prices, "over_tokens": 0}}}}
+        )

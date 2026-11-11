@@ -131,7 +131,10 @@ service key is attached server-side only.
 
 - `OMNIGENT_FEATURES` includes `funded_trial`.
 - `OMNIGENT_FUNDED_TRIAL_CONFIG` JSON: `models` (USD per million:
-  `input`, `output`, `cache_read`, `cache_write`), `compute_usd_per_hour`
+  `input`, `output`, `cache_read`, `cache_write`; an optional `long_prompt`
+  object with `over_tokens` and the same four prices bills a whole request at
+  that tier once its prompt, cache reads and writes included, passes
+  `over_tokens`), `compute_usd_per_hour`
   (by sandbox provider), optional `max_output_tokens`, `max_request_bytes`,
   `max_compute_hours`, `upstream_base_url`. Unlisted models/providers are denied.
   Optional `welcome_grant` gives every open-signup registration a trial grant:
