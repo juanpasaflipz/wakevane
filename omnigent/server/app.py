@@ -3874,6 +3874,8 @@ def create_app(
                     auth_provider=auth_provider,
                     agent_cache=agent_cache,
                     artifact_store=artifact_store,
+                    github_store=app.state.github_store,
+                    github_client=app.state.github_client,
                 )
     # Admin control for the server-wide sharing settings. Always mounted (the
     # handlers self-gate on admin); PUT is a no-op-reject unless this server

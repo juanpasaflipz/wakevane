@@ -24,7 +24,7 @@ from omnigent.db.utils import generate_agent_id
 from omnigent.errors import OmnigentError
 from omnigent.server.auth import UnifiedAuthProvider
 from omnigent.server.events import EventBus
-from omnigent.server.ladders.engine import LadderEngine, SessionSpend
+from omnigent.server.ladders.engine import LadderEngine, SessionSpend, SessionState
 from omnigent.server.ladders.model import LadderAttempt
 from omnigent.server.ladders.store import LadderStore
 from omnigent.server.routes.events import create_events_router
@@ -73,8 +73,14 @@ class _Harness:
         self.store = LadderStore(db_uri)
         self.agents = SqlAlchemyAgentStore(db_uri)
         permissions = SqlAlchemyPermissionStore(db_uri)
+        # Sessions not listed here read as running and active right now.
+        self.sessions: dict[str, SessionState | None] = {}
         self.engine = LadderEngine(
-            self.store, self.launcher, read_spend=self._read_spend, clock=self.clock
+            self.store,
+            self.launcher,
+            read_spend=self._read_spend,
+            probe_session=self._probe_session,
+            clock=self.clock,
         )
         bus = EventBus(SqlAlchemySubscriptionStore(db_uri), _no_wake)
         bus.add_listener(self.engine.handle_event)
@@ -102,6 +108,10 @@ class _Harness:
 
     def _read_spend(self, attempt: LadderAttempt) -> SessionSpend | None:
         return self.spend.get(attempt.conversation_id or "")
+
+    def _probe_session(self, attempt: LadderAttempt) -> SessionState | None:
+        default = SessionState(status="running", updated_at=int(self.clock()), model_tokens=900)
+        return self.sessions.get(attempt.conversation_id or "", default)
 
     def agent(self, name: str) -> str:
         agent_id = generate_agent_id()
@@ -444,3 +454,126 @@ async def test_unknown_agent_on_a_rung_is_rejected(
     response = await client.post("/v1/ladders", json=body, headers=_headers())
     assert response.status_code in (403, 404), response.text
     assert (await client.get("/v1/ladders", headers=_headers())).json() == {"data": []}
+
+
+async def test_session_that_ends_without_pushing_escalates_once_it_has_settled(
+    client: httpx.AsyncClient, harness: _Harness
+) -> None:
+    ladder = await _create_ladder(client, harness)
+    await _issue_opened(client, harness, 11)
+    (attempt,) = await _attempts(client, ladder["id"])
+    went_idle_at = int(harness.clock())
+    harness.sessions[attempt["conversation_id"]] = SessionState(
+        "idle", went_idle_at, model_tokens=4_000
+    )
+
+    # Just idle is not enough: the turn may only have ended a moment ago.
+    harness.clock.now += 60
+    assert [a["status"] for a in await _attempts(client, ladder["id"])] == ["running"]
+
+    harness.clock.now += 5 * 60
+    await _attempts(client, ladder["id"])
+    await harness.engine.drain()
+    first, second = await _attempts(client, ladder["id"])
+    assert (first["status"], first["detail"]) == (
+        "failed",
+        "the session ended without pushing its branch",
+    )
+    assert (second["status"], second["rung_index"]) == ("running", 1)
+
+
+async def test_idle_session_that_pushed_its_branch_keeps_waiting_for_the_check(
+    client: httpx.AsyncClient, harness: _Harness
+) -> None:
+    ladder = await _create_ladder(client, harness)
+    await _issue_opened(client, harness, 12)
+    (attempt,) = await _attempts(client, ladder["id"])
+    await _github(client, harness, "push", {"ref": f"refs/heads/{attempt['branch']}"})
+    harness.sessions[attempt["conversation_id"]] = SessionState(
+        "idle", int(harness.clock()), model_tokens=4_000
+    )
+
+    harness.clock.now += 20 * 60
+    (attempt,) = await _attempts(client, ladder["id"])
+    assert (attempt["status"], attempt["detail"]) == ("running", "branch pushed")
+
+    await _check_suite(client, harness, attempt["branch"], "success")
+    (attempt,) = await _attempts(client, ladder["id"])
+    assert attempt["status"] == "passed"
+    assert len(harness.launcher.requests) == 1
+
+
+@pytest.mark.parametrize(
+    ("state", "detail"),
+    [
+        (SessionState("failed", 0, error="sandbox exited"), "the session failed: sandbox exited"),
+        (
+            SessionState("running", 0, pending_approvals=1, model_tokens=900),
+            "waiting for an approval",
+        ),
+        # Reports itself as running, or idle, but its model never answered.
+        (SessionState("running", 0, model_tokens=0), "never used its model"),
+        (SessionState("idle", 0, model_tokens=0), "never used its model"),
+        (None, "the session no longer exists"),
+    ],
+    ids=["failed", "waiting-for-approval", "silent-running", "silent-idle", "deleted"],
+)
+async def test_session_that_cannot_run_ends_the_attempt_without_escalating(
+    client: httpx.AsyncClient, harness: _Harness, state: SessionState | None, detail: str
+) -> None:
+    ladder = await _create_ladder(client, harness)
+    await _issue_opened(client, harness, 13)
+    (attempt,) = await _attempts(client, ladder["id"])
+    harness.sessions[attempt["conversation_id"]] = state
+
+    (attempt,) = await _attempts(client, ladder["id"])
+    await harness.engine.drain()
+
+    assert attempt["status"] == "launch_failed"
+    assert detail in attempt["detail"]
+    assert len(harness.launcher.requests) == 1
+
+
+async def test_rung_permission_mode_reaches_the_launch_and_bad_modes_are_rejected(
+    client: httpx.AsyncClient, harness: _Harness
+) -> None:
+    rungs = [{"agent_id": harness.agent("native"), "permission_mode": "bypassPermissions"}]
+    ladder = await _create_ladder(client, harness, rungs=rungs)
+    assert ladder["rungs"][0]["permission_mode"] == "bypassPermissions"
+
+    await _issue_opened(client, harness, 14)
+    assert harness.launcher.requests[0].permission_mode == "bypassPermissions"
+
+    rungs[0]["permission_mode"] = "yolo"
+    body = {
+        "name": "x",
+        "repo": _REPO,
+        "trigger_kind": "issues.opened",
+        "prompt_template": "Fix it",
+        "execution_target": "connected_host",
+        "rungs": rungs,
+    }
+    refused = await client.post("/v1/ladders", json=body, headers=_headers())
+    assert refused.status_code == 400, refused.text
+    assert "permission_mode" in refused.text
+
+
+async def test_quiet_session_is_left_alone_until_it_has_settled_and_when_it_is_active(
+    client: httpx.AsyncClient, harness: _Harness
+) -> None:
+    ladder = await _create_ladder(client, harness)
+    await _issue_opened(client, harness, 15)
+    (attempt,) = await _attempts(client, ladder["id"])
+    started = int(harness.clock())
+
+    # No tokens yet, two minutes in: the first model call may still be on its way.
+    harness.sessions[attempt["conversation_id"]] = SessionState("running", started, model_tokens=0)
+    harness.clock.now += 2 * 60
+    assert [a["status"] for a in await _attempts(client, ladder["id"])] == ["running"]
+
+    # Usage unreported, but the session keeps producing output: still working.
+    harness.clock.now += 10 * 60
+    harness.sessions[attempt["conversation_id"]] = SessionState(
+        "running", int(harness.clock()) - 30, model_tokens=0
+    )
+    assert [a["status"] for a in await _attempts(client, ladder["id"])] == ["running"]

@@ -8,12 +8,23 @@ from omnigent.db.db_models import workspace_scope
 from omnigent.runtime.policies.builder import load_session_usage_and_tree
 from omnigent.server.auth import AuthProvider
 from omnigent.server.events.bus import EventBus
-from omnigent.server.ladders.engine import LadderEngine, SessionSpend, SpendReader
+from omnigent.server.ladders.engine import (
+    LadderEngine,
+    SessionProbe,
+    SessionSpend,
+    SessionState,
+    SpendReader,
+)
 from omnigent.server.ladders.model import LadderAttempt
 from omnigent.server.ladders.store import LadderStore
+from omnigent.server.routes.ladder_template import create_ladder_template_router
 from omnigent.server.routes.ladders import create_ladders_router
 from omnigent.server.scheduled.fire import LaunchOutcome, LaunchRequest, launch_session
-from omnigent.server.usage_efficiency import model_counters_from_usage, session_cost_usd
+from omnigent.server.usage_efficiency import (
+    counters_from_usage,
+    model_counters_from_usage,
+    session_cost_usd,
+)
 from omnigent.stores import AgentStore, ConversationStore, PermissionStore
 from omnigent.stores.artifact_store import ArtifactStore
 
@@ -42,6 +53,42 @@ def build_spend_reader(conversation_store: ConversationStore) -> SpendReader:
     return read_spend
 
 
+_TASK_ERROR_LABEL = "omnigent.last_task_error_message"
+
+
+def build_session_probe(conversation_store: ConversationStore) -> SessionProbe:
+    """
+    Build the reader that reports where an attempt's session stands.
+
+    :param conversation_store: Store holding the attempt's session.
+    :returns: A probe yielding the session's live state, or ``None`` when the
+        session was deleted.
+    """
+
+    def probe(attempt: LadderAttempt) -> SessionState | None:
+        if attempt.conversation_id is None:
+            return None
+        with workspace_scope(attempt.workspace_id):
+            conversation = conversation_store.get_conversation(attempt.conversation_id)
+            if conversation is None:
+                return None
+            usage, _tree = load_session_usage_and_tree(
+                conversation.id,
+                conversation_store,
+                root_conversation_id=conversation.root_conversation_id,
+            )
+        counters = counters_from_usage(usage)
+        return SessionState(
+            status=conversation.live_status,
+            updated_at=conversation.updated_at,
+            pending_approvals=conversation.pending_elicitation_count or 0,
+            error=conversation.labels.get(_TASK_ERROR_LABEL) or None,
+            model_tokens=counters.prompt_tokens + counters.output_tokens,
+        )
+
+    return probe
+
+
 def mount_ladders(
     app: Any,
     event_bus: EventBus,
@@ -53,6 +100,8 @@ def mount_ladders(
     auth_provider: AuthProvider | None,
     agent_cache: Any | None,
     artifact_store: ArtifactStore | None,
+    github_store: Any | None = None,
+    github_client: Any | None = None,
 ) -> LadderEngine:
     """
     Start serving ladders on ``app``.
@@ -74,7 +123,12 @@ def mount_ladders(
             )
         return await launch_session(deps, request)
 
-    engine = LadderEngine(store, launch, read_spend=read_spend)
+    engine = LadderEngine(
+        store,
+        launch,
+        read_spend=read_spend,
+        probe_session=build_session_probe(conversation_store),
+    )
     event_bus.add_listener(engine.handle_event)
     app.state.ladder_store = store
     app.state.ladder_engine = engine
@@ -92,5 +146,20 @@ def mount_ladders(
         ),
         prefix="/v1",
         tags=["ladders"],
+    )
+    app.include_router(
+        create_ladder_template_router(
+            store,
+            conversation_store=conversation_store,
+            agent_store=agent_store,
+            agent_cache=agent_cache,
+            permission_store=permission_store,
+            artifact_store=artifact_store,
+            auth_provider=auth_provider,
+            github_store=github_store,
+            github_client=github_client,
+        ),
+        prefix="/v1",
+        tags=["templates"],
     )
     return engine

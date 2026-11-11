@@ -56,10 +56,38 @@ class SessionSpend:
     model: str | None
 
 
+@dataclass(frozen=True)
+class SessionState:
+    """
+    Where an attempt's session stands, as last reported by its runner.
+
+    :param status: ``"running"``, ``"idle"``, ``"waiting"`` or ``"failed"``;
+        ``None`` when the runner never reported.
+    :param updated_at: Epoch seconds of the session's last activity.
+    :param pending_approvals: Approval prompts nobody has answered.
+    :param error: The session's last task error, if any.
+    :param model_tokens: Tokens the session's models have read and written
+        so far; ``None`` when usage could not be read.
+    """
+
+    status: str | None
+    updated_at: int
+    pending_approvals: int = 0
+    error: str | None = None
+    model_tokens: int | None = None
+
+
 #: Starts one session and reports how the launch ended.
 Launch = Callable[[LaunchRequest], Awaitable[LaunchOutcome]]
 #: Reads an attempt's session spend; ``None`` when it cannot be read.
 SpendReader = Callable[[LadderAttempt], SessionSpend | None]
+#: Reads an attempt's session state; ``None`` when the session is gone.
+SessionProbe = Callable[[LadderAttempt], SessionState | None]
+
+# How long a session must sit unchanged before its state is acted on, so a
+# turn boundary or a slow push is not mistaken for the end of the work.
+SESSION_SETTLE_SECONDS = 300
+PROGRESS_BRANCH_PUSHED = "branch pushed"
 
 
 def task_key_for(event: CanonicalEvent) -> str:
@@ -133,6 +161,8 @@ class LadderEngine:
     :param store: Ladder and attempt persistence.
     :param launch: Starts a session for an attempt.
     :param read_spend: Reads an attempt's session cost when it ends.
+    :param probe_session: Reads an attempt's session state, so an attempt
+        whose session cannot finish is ended before its timeout.
     :param clock: Epoch-seconds source, injectable for tests.
     """
 
@@ -142,11 +172,13 @@ class LadderEngine:
         launch: Launch,
         *,
         read_spend: SpendReader | None = None,
+        probe_session: SessionProbe | None = None,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self._store = store
         self._launch = launch
         self._read_spend = read_spend
+        self._probe_session = probe_session
         self._clock = clock
         self._launches: set[asyncio.Task[None]] = set()
 
@@ -155,7 +187,9 @@ class LadderEngine:
         if event.source != "github":
             return
         await self.sweep()
-        attempt_id = attempt_id_from_branch(event.fields.get("head_branch"))
+        attempt_id = attempt_id_from_branch(
+            event.fields.get("ref") if event.kind == "push" else event.fields.get("head_branch")
+        )
         if attempt_id is not None:
             # An attempt's own branch is judged; it never starts another task.
             await self._on_attempt_branch_event(event, attempt_id)
@@ -164,13 +198,17 @@ class LadderEngine:
 
     async def sweep(self) -> int:
         """
-        End attempts that outlived their ladder's timeout and escalate them.
+        End attempts that can no longer get a verdict, and escalate them
+        when that says something about the rung.
 
-        :returns: How many attempts were timed out.
+        An attempt ends here when it outlived its ladder's timeout, or when
+        its session has settled in a state no check result will follow.
+
+        :returns: How many attempts were ended.
         """
         now = int(self._clock())
         ladders: dict[str, Ladder | None] = {}
-        timed_out = 0
+        ended = 0
         for attempt in self._store.list_running():
             if attempt.ladder_id not in ladders:
                 ladders[attempt.ladder_id] = self._store.get_ladder_any_workspace(
@@ -178,12 +216,58 @@ class LadderEngine:
                 )
             ladder = ladders[attempt.ladder_id]
             minutes = ladder.attempt_timeout_minutes if ladder else DEFAULT_ATTEMPT_TIMEOUT_MINUTES
-            if now - attempt.started_at < minutes * 60:
-                continue
-            detail = f"no check verdict within {minutes} minutes"
-            if await self._finish(attempt, ladder, AttemptStatus.TIMED_OUT.value, detail):
-                timed_out += 1
-        return timed_out
+            if now - attempt.started_at >= minutes * 60:
+                verdict: tuple[str, str] | None = (
+                    AttemptStatus.TIMED_OUT.value,
+                    f"no check verdict within {minutes} minutes",
+                )
+            else:
+                verdict = await self._session_verdict(attempt, now)
+            if verdict is not None and await self._finish(attempt, ladder, *verdict):
+                ended += 1
+        return ended
+
+    async def _session_verdict(self, attempt: LadderAttempt, now: int) -> tuple[str, str] | None:
+        """
+        Decide whether an attempt's session already rules out a check result.
+
+        :returns: ``(status, detail)`` to end the attempt with, or ``None``
+            to keep waiting.
+        """
+        if self._probe_session is None or attempt.conversation_id is None:
+            return None
+        try:
+            state = await asyncio.to_thread(self._probe_session, attempt)
+        except Exception:
+            _logger.exception("Could not read the session of ladder attempt %s", attempt.id)
+            return None
+        # A session that cannot run says nothing about the rung: no escalation.
+        if state is None:
+            return AttemptStatus.LAUNCH_FAILED.value, "the session no longer exists"
+        if state.status == "failed":
+            reason = f": {state.error}" if state.error else ""
+            return AttemptStatus.LAUNCH_FAILED.value, f"the session failed{reason}"
+        if now - state.updated_at < SESSION_SETTLE_SECONDS:
+            return None
+        if state.model_tokens == 0:
+            # Quiet and its model never answered, whatever status it reports:
+            # typically an agent that is not signed in to its provider.
+            return (
+                AttemptStatus.LAUNCH_FAILED.value,
+                "the session never used its model; the agent may not be signed in "
+                "or the model may not be available to it",
+            )
+        if state.pending_approvals > 0 or state.status == "waiting":
+            return (
+                AttemptStatus.LAUNCH_FAILED.value,
+                "the session is waiting for an approval; give the rung a permission_mode "
+                "or an agent that does not ask",
+            )
+        reached_repository = attempt.pull_request is not None or attempt.detail is not None
+        if state.status == "idle" and not reached_repository:
+            # The agent stopped without pushing: this rung did not solve it.
+            return AttemptStatus.FAILED.value, "the session ended without pushing its branch"
+        return None
 
     async def drain(self) -> None:
         """Wait for session launches started so far (tests and shutdown)."""
@@ -193,6 +277,9 @@ class LadderEngine:
     async def _on_attempt_branch_event(self, event: CanonicalEvent, attempt_id: str) -> None:
         attempt = self._store.get_attempt_any_workspace(attempt_id)
         if attempt is None or event.fields.get("repo") != attempt.repo:
+            return
+        if event.kind == "push":
+            self._store.note_progress(attempt.id, PROGRESS_BRANCH_PUSHED)
             return
         pull_request = event.fields.get("pull_request")
         if (
@@ -311,6 +398,7 @@ class LadderEngine:
             workspace=ladder.workspace,
             max_cost_usd=rung.max_cost_usd,
             model_override=rung.model_override,
+            permission_mode=rung.permission_mode,
             labels={
                 LAUNCHED_BY_LABEL: "ladder",
                 LADDER_LABEL: ladder.id,
