@@ -42,14 +42,27 @@ export async function fetchOpenAIKeyStatus(): Promise<OpenAIKeyStatus | null> {
   return readStatus(res, "Key status");
 }
 
-/** Save or replace the current user's key. */
-export async function saveOpenAIKey(apiKey: string): Promise<OpenAIKeyStatus> {
+/** Save or replace the current user's key, with the models it should run. */
+export async function saveOpenAIKey(
+  apiKey: string,
+  models: string[] = [],
+): Promise<OpenAIKeyStatus> {
   const res = await authenticatedFetch(OPENAI_KEY_PATH, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ api_key: apiKey }),
+    body: JSON.stringify({ api_key: apiKey, models }),
   });
   return readStatus(res, "Saving the key");
+}
+
+/** Change the models the saved key runs; an empty list means the default. */
+export async function saveOpenAIKeyModels(models: string[]): Promise<OpenAIKeyStatus> {
+  const res = await authenticatedFetch(OPENAI_KEY_PATH, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ models }),
+  });
+  return readStatus(res, "Saving the model");
 }
 
 /** Remove the current user's key. */

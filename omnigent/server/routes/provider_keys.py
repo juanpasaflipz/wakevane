@@ -24,13 +24,11 @@ _MODEL_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}")
 _MAX_MODELS = 8
 
 
-class SaveProviderKeyRequest(BaseModel):
-    """Body of ``PUT /v1/provider-keys/openai``."""
+class UpdateProviderKeyModelsRequest(BaseModel):
+    """Body of ``PATCH /v1/provider-keys/openai``."""
 
     model_config = ConfigDict(extra="forbid")
 
-    # Unconstrained on purpose: a model-level rejection would echo the value back.
-    api_key: str
     models: list[str] = Field(default_factory=list, max_length=_MAX_MODELS)
 
     @field_validator("models")
@@ -40,6 +38,13 @@ class SaveProviderKeyRequest(BaseModel):
         if any(not _MODEL_ID_PATTERN.fullmatch(model) for model in models):
             raise ValueError("each model must be a plain model id")
         return models
+
+
+class SaveProviderKeyRequest(UpdateProviderKeyModelsRequest):
+    """Body of ``PUT /v1/provider-keys/openai``."""
+
+    # Unconstrained on purpose: a model-level rejection would echo the value back.
+    api_key: str
 
 
 def _status(key: UserProviderKey | None) -> dict[str, Any]:
@@ -93,6 +98,17 @@ def create_provider_keys_router(
         saved = await asyncio.to_thread(
             lambda: store.upsert(owner, api_key=api_key, models=tuple(body.models))
         )
+        return _status(saved)
+
+    @router.patch("/provider-keys/openai")
+    async def update_openai_key_models(
+        request: Request, body: UpdateProviderKeyModelsRequest
+    ) -> dict[str, Any]:
+        """Change which models the saved key runs, without sending the key again."""
+        owner = _owner(request)
+        saved = await asyncio.to_thread(lambda: store.set_models(owner, tuple(body.models)))
+        if saved is None:
+            raise OmnigentError("Save an OpenAI key first", code=ErrorCode.NOT_FOUND)
         return _status(saved)
 
     @router.delete("/provider-keys/openai")
