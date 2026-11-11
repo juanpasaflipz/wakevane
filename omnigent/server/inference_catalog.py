@@ -27,6 +27,7 @@ from omnigent.models.model_metadata import ModelCapability, ModelWireAPI
 from omnigent.onboarding.provider_config import ProviderEntry, load_providers, resolve_secret
 from omnigent.server.auth import RESERVED_USER_LOCAL
 from omnigent.server.databricks_identity import resolve_databricks_token
+from omnigent.server.user_provider_keys import bind_user_openai_key, provider_key_store
 
 
 def _invalid(message: str) -> OmnigentError:
@@ -204,6 +205,13 @@ class SandboxInferenceService:
         if not parse_inference_config(raw):
             return None
         harness = normalize_inference_harness(harness)
+        owner = user_id or RESERVED_USER_LOCAL
+        key_store = provider_key_store(self._state)
+        if key_store is not None and user_id is not None:
+            # Metadata only: the key itself is read on the launch path.
+            saved_key = await asyncio.to_thread(key_store.get, user_id)
+            if saved_key is not None:
+                bind_user_openai_key(raw, saved_key)
         discovery = copy.deepcopy(getattr(target, "model_discovery", None) or {})
         try:
             validate_inference_credentials(raw, discovery)
@@ -217,7 +225,6 @@ class SandboxInferenceService:
                 raise _invalid("Model discovery entries must be mappings.")
             _endpoint(discovery_entry.get("base_url"))
         bound = resolve_bound_provider(raw, harness, agent_auth, allow_empty=True)
-        owner = user_id or RESERVED_USER_LOCAL
         runtime: dict[str, Any] = {
             "providers": copy.deepcopy(raw.get("providers", {})),
             "inference": copy.deepcopy(raw.get("inference", {})),

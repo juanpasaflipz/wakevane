@@ -825,6 +825,9 @@ class ManagedSandboxDeployment:
     funded_trial: Any = None
     # Compute meter (``omnigent.server.compute_meter``), filled in by ``create_app``.
     compute_meter: Any = None
+    # Owners' own provider keys (``omnigent.server.user_provider_keys``), filled in
+    # by ``create_app``; ``None`` when the feature is off.
+    provider_key_store: Any = None
 
     def __post_init__(self) -> None:
         # Enforce the "never empty" invariant the accessors rely on

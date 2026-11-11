@@ -266,7 +266,9 @@ export function SettingsSidebarBody({
   // not just accounts deploys. Non-admins never see it.
   const isAdmin = useIsAdmin();
   const integrationsEnabled =
-    info !== "loading" && (info.enabled_connections ?? []).some((provider) => provider !== "mcp");
+    info !== "loading" &&
+    ((info.enabled_connections ?? []).some((provider) => provider !== "mcp") ||
+      isFeatureEnabled(info, "sandbox_provider_keys"));
   const mcpEnabled = info !== "loading" && (info.enabled_connections ?? []).includes("mcp");
   const { section } = useSettingsRoute();
   const groups = settingsNavGroups(

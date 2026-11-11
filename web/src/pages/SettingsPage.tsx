@@ -121,6 +121,7 @@ import { useAppName } from "@/lib/branding";
 import { getCurrentIsAdmin, resolveIdentity } from "@/lib/identity";
 import { useServerInfo } from "@/lib/CapabilitiesContext";
 import { isFeatureEnabled } from "@/lib/capabilities";
+import { OpenAIKeyControl } from "@/pages/settings/OpenAIKeyControl";
 import { useOmnigentAnalytics, useOmnigentPageView } from "@/lib/analytics";
 import {
   type Conversation,
@@ -1276,21 +1277,31 @@ const CONNECTION_PANELS: Record<string, ComponentType> = {
 function IntegrationsSection() {
   const info = useServerInfo();
   const providers = info === "loading" ? [] : (info.enabled_connections ?? []);
+  const hasConnectionPanels = providers.some((provider) => CONNECTION_PANELS[provider]);
   return (
     <Section
       title="Sandbox Integrations"
       description="External accounts your sandboxes use on your behalf."
     >
-      <SettingsGroup title="Connections" testId="settings-group-integrations">
-        {providers.map((provider, index) => {
-          const Panel = CONNECTION_PANELS[provider];
-          return Panel ? (
-            <div key={provider} className={cn(index > 0 && "mt-4 border-t border-border pt-4")}>
-              <Panel />
-            </div>
-          ) : null;
-        })}
-      </SettingsGroup>
+      <div className="flex flex-col gap-6">
+        {hasConnectionPanels && (
+          <SettingsGroup title="Connections" testId="settings-group-integrations">
+            {providers.map((provider, index) => {
+              const Panel = CONNECTION_PANELS[provider];
+              return Panel ? (
+                <div key={provider} className={cn(index > 0 && "mt-4 border-t border-border pt-4")}>
+                  <Panel />
+                </div>
+              ) : null;
+            })}
+          </SettingsGroup>
+        )}
+        {isFeatureEnabled(info, "sandbox_provider_keys") && (
+          <SettingsGroup title="Model providers" testId="settings-group-provider-keys">
+            <OpenAIKeyControl />
+          </SettingsGroup>
+        )}
+      </div>
     </Section>
   );
 }
