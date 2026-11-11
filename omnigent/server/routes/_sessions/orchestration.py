@@ -4431,7 +4431,9 @@ async def _run_managed_launch(
     )
     if admitted is None:
         return
-    sandbox_config = admitted.deployment
+    sandbox_config = await _with_owner_provider_keys(
+        admitted.deployment, owner=owner, conversation=saved_conversation
+    )
 
     agent_name: str | None = None
     if agent_store is not None and agent_id is not None:
@@ -4486,6 +4488,40 @@ async def _run_managed_launch(
             tunnel_registry=tunnel_registry,
             relaunch_host=relaunch_host,
         )
+
+
+async def _with_owner_provider_keys(
+    sandbox_config: ManagedSandboxDeployment,
+    *,
+    owner: str,
+    conversation: Conversation | None,
+) -> ManagedSandboxDeployment:
+    """Give a launch the owner's own provider key when the session's profile uses it.
+
+    The store rides on the deployment so every launch path (create, relaunch,
+    wake, scheduled fire) reads the same one. A store failure launches without
+    the key: the session still runs on the operator's provider.
+    """
+    from omnigent.server.user_provider_keys import with_user_provider_keys
+
+    store = getattr(sandbox_config, "provider_key_store", None)
+    if store is None:
+        return sandbox_config
+    try:
+        return await asyncio.to_thread(
+            with_user_provider_keys,
+            sandbox_config,
+            owner=owner,
+            labels=conversation.labels if conversation is not None else None,
+            store=store,
+        )
+    except Exception:  # noqa: BLE001 - a key lookup must not fail the launch
+        _logger.warning(
+            "Could not read the owner's provider key for session %s; launching without it",
+            conversation.id if conversation is not None else "unknown",
+            exc_info=True,
+        )
+        return sandbox_config
 
 
 # Seconds between admission retries while a launch waits for a free funded slot.
@@ -5726,7 +5762,9 @@ async def _run_managed_wake(
         )
         if admitted is None:
             return
-        sandbox_config = admitted.deployment
+        sandbox_config = await _with_owner_provider_keys(
+            admitted.deployment, owner=woken_host.user_id, conversation=conv
+        )
         wake_charge = admitted.charge
 
     def _on_stage(stage: str, details: str | None = None) -> None:

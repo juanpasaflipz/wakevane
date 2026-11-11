@@ -42,6 +42,7 @@ class Feature(StrEnum):
     EGM_CLOUD_CODING = "egm_cloud_coding"
     BILLING = "billing"
     WEB_ONLY = "web_only"
+    SANDBOX_PROVIDER_KEYS = "sandbox_provider_keys"
 
 
 @dataclass(frozen=True)
@@ -214,6 +215,14 @@ FEATURE_DEFINITIONS: tuple[FeatureDefinition, ...] = (
         ),
         owner="server",
         review_by_release="0.27.0",
+    ),
+    FeatureDefinition(
+        feature=Feature.SANDBOX_PROVIDER_KEYS,
+        description=(
+            "A user's own OpenAI API key runs the Codex harnesses in their managed sandboxes"
+        ),
+        owner="server",
+        review_by_release="0.28.0",
     ),
     FeatureDefinition(
         feature=Feature.SUBSCRIPTIONS_PAGE,

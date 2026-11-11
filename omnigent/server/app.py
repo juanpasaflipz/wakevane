@@ -3696,6 +3696,31 @@ def create_app(
         prefix="/v1",
         tags=["funded trial"],
     )
+    # A user's own provider key needs an account to own it and a cipher to store it.
+    app.state.provider_key_store = None
+    if (
+        resolved_feature_flags.enabled(Feature.SANDBOX_PROVIDER_KEYS)
+        and permission_store is not None
+        and auth_provider is not None
+    ):
+        from omnigent.connections.provider_keys import OpenAIKeyStore
+        from omnigent.server.routes.provider_keys import create_provider_keys_router
+        from omnigent.stores.credential_store.secret_cipher import build_integration_cipher
+
+        provider_key_cipher = build_integration_cipher("Sandbox provider keys")
+        if provider_key_cipher is not None:
+            app.state.provider_key_store = OpenAIKeyStore(
+                permission_store.storage_location, provider_key_cipher
+            )
+            app.include_router(
+                create_provider_keys_router(
+                    app.state.provider_key_store, auth_provider=auth_provider
+                ),
+                prefix="/v1",
+                tags=["provider keys"],
+            )
+            if getattr(app.state, "sandbox_config", None) is not None:
+                app.state.sandbox_config.provider_key_store = app.state.provider_key_store
     if app.state.billing is not None:
         from omnigent.server.routes.billing import create_billing_router
 

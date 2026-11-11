@@ -27,6 +27,7 @@ the `omnigent` and `omni` commands still work, and settings keep their
 | Examples | A software-factory foreman with triager, fixer and watcher workers; a shim-janitor agent; an opt-in Elephant-Goldfish design-review bundle. | `examples/factory/`, `examples/shim-janitor/`, `examples/egm/` |
 | Deployment | One-command Railway deploy built from source, with generated secrets and a persistent volume. | `deploy/railway/deploy.sh`, `railway.toml` |
 | Public signup safety | Attempt limits on sign-in, open signup and password reset; self-serve password reset by emailed single-use link; baseline security response headers with an optional `frame-ancestors` setting; operator terms and privacy links on the sign-up page. | `omnigent/server/{auth_rate_limit,password_reset,security_headers}.py`, `omnigent/server/routes/accounts_auth.py`, `web/src/pages/{ForgotPasswordPage,ResetPasswordPage}.tsx`, `docs/PUBLIC_LAUNCH.md` |
+| Sandbox provider keys | A user's own OpenAI API key, encrypted at rest, binds the Codex harnesses in the sessions they create and reaches the sandbox only as launch environment. Behind the `sandbox_provider_keys` flag, off by default. | `omnigent/connections/provider_keys.py`, `omnigent/server/user_provider_keys.py`, `omnigent/server/routes/provider_keys.py`, `web/src/pages/settings/OpenAIKeyControl.tsx`, `docs/SANDBOX_PROVIDER_KEYS.md` |
 | Branding | The WakeVane name, tagline and mark as default branding, with the "Powered by Omnigent" credit shown. | `omnigent/resources/branding/wakevane/` |
 
 ## Changed
