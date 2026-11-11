@@ -20,7 +20,11 @@ from omnigent.server.ladders.store import LadderStore
 from omnigent.server.routes.ladder_template import create_ladder_template_router
 from omnigent.server.routes.ladders import create_ladders_router
 from omnigent.server.scheduled.fire import LaunchOutcome, LaunchRequest, launch_session
-from omnigent.server.usage_efficiency import model_counters_from_usage, session_cost_usd
+from omnigent.server.usage_efficiency import (
+    counters_from_usage,
+    model_counters_from_usage,
+    session_cost_usd,
+)
 from omnigent.stores import AgentStore, ConversationStore, PermissionStore
 from omnigent.stores.artifact_store import ArtifactStore
 
@@ -66,13 +70,20 @@ def build_session_probe(conversation_store: ConversationStore) -> SessionProbe:
             return None
         with workspace_scope(attempt.workspace_id):
             conversation = conversation_store.get_conversation(attempt.conversation_id)
-        if conversation is None:
-            return None
+            if conversation is None:
+                return None
+            usage, _tree = load_session_usage_and_tree(
+                conversation.id,
+                conversation_store,
+                root_conversation_id=conversation.root_conversation_id,
+            )
+        counters = counters_from_usage(usage)
         return SessionState(
             status=conversation.live_status,
             updated_at=conversation.updated_at,
             pending_approvals=conversation.pending_elicitation_count or 0,
             error=conversation.labels.get(_TASK_ERROR_LABEL) or None,
+            model_tokens=counters.prompt_tokens + counters.output_tokens,
         )
 
     return probe

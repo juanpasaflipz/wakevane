@@ -110,7 +110,7 @@ class _Harness:
         return self.spend.get(attempt.conversation_id or "")
 
     def _probe_session(self, attempt: LadderAttempt) -> SessionState | None:
-        default = SessionState(status="running", updated_at=int(self.clock()))
+        default = SessionState(status="running", updated_at=int(self.clock()), model_tokens=900)
         return self.sessions.get(attempt.conversation_id or "", default)
 
     def agent(self, name: str) -> str:
@@ -463,7 +463,9 @@ async def test_session_that_ends_without_pushing_escalates_once_it_has_settled(
     await _issue_opened(client, harness, 11)
     (attempt,) = await _attempts(client, ladder["id"])
     went_idle_at = int(harness.clock())
-    harness.sessions[attempt["conversation_id"]] = SessionState("idle", went_idle_at)
+    harness.sessions[attempt["conversation_id"]] = SessionState(
+        "idle", went_idle_at, model_tokens=4_000
+    )
 
     # Just idle is not enough: the turn may only have ended a moment ago.
     harness.clock.now += 60
@@ -487,7 +489,9 @@ async def test_idle_session_that_pushed_its_branch_keeps_waiting_for_the_check(
     await _issue_opened(client, harness, 12)
     (attempt,) = await _attempts(client, ladder["id"])
     await _github(client, harness, "push", {"ref": f"refs/heads/{attempt['branch']}"})
-    harness.sessions[attempt["conversation_id"]] = SessionState("idle", int(harness.clock()))
+    harness.sessions[attempt["conversation_id"]] = SessionState(
+        "idle", int(harness.clock()), model_tokens=4_000
+    )
 
     harness.clock.now += 20 * 60
     (attempt,) = await _attempts(client, ladder["id"])
@@ -503,10 +507,16 @@ async def test_idle_session_that_pushed_its_branch_keeps_waiting_for_the_check(
     ("state", "detail"),
     [
         (SessionState("failed", 0, error="sandbox exited"), "the session failed: sandbox exited"),
-        (SessionState("running", 0, pending_approvals=1), "waiting for an approval"),
+        (
+            SessionState("running", 0, pending_approvals=1, model_tokens=900),
+            "waiting for an approval",
+        ),
+        # Reports itself as running, or idle, but its model never answered.
+        (SessionState("running", 0, model_tokens=0), "never used its model"),
+        (SessionState("idle", 0, model_tokens=0), "never used its model"),
         (None, "the session no longer exists"),
     ],
-    ids=["failed", "waiting-for-approval", "deleted"],
+    ids=["failed", "waiting-for-approval", "silent-running", "silent-idle", "deleted"],
 )
 async def test_session_that_cannot_run_ends_the_attempt_without_escalating(
     client: httpx.AsyncClient, harness: _Harness, state: SessionState | None, detail: str
@@ -546,3 +556,24 @@ async def test_rung_permission_mode_reaches_the_launch_and_bad_modes_are_rejecte
     refused = await client.post("/v1/ladders", json=body, headers=_headers())
     assert refused.status_code == 400, refused.text
     assert "permission_mode" in refused.text
+
+
+async def test_quiet_session_is_left_alone_until_it_has_settled_and_when_it_is_active(
+    client: httpx.AsyncClient, harness: _Harness
+) -> None:
+    ladder = await _create_ladder(client, harness)
+    await _issue_opened(client, harness, 15)
+    (attempt,) = await _attempts(client, ladder["id"])
+    started = int(harness.clock())
+
+    # No tokens yet, two minutes in: the first model call may still be on its way.
+    harness.sessions[attempt["conversation_id"]] = SessionState("running", started, model_tokens=0)
+    harness.clock.now += 2 * 60
+    assert [a["status"] for a in await _attempts(client, ladder["id"])] == ["running"]
+
+    # Usage unreported, but the session keeps producing output: still working.
+    harness.clock.now += 10 * 60
+    harness.sessions[attempt["conversation_id"]] = SessionState(
+        "running", int(harness.clock()) - 30, model_tokens=0
+    )
+    assert [a["status"] for a in await _attempts(client, ladder["id"])] == ["running"]

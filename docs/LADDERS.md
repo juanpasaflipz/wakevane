@@ -47,7 +47,9 @@ issue opened ──► rung 1 (cheap agent) ──► pushes wakevane/att-<id>, 
    more than five minutes ago without pushing its branch: the agent gave up.
 6. An attempt whose session cannot run ends as `launch_failed` and does not
    escalate, because it says nothing about the agent: the session failed, was
-   deleted, or has been waiting for an approval for five minutes.
+   deleted, has been waiting for an approval for five minutes, or has been
+   quiet for five minutes without its model ever answering (usually an agent
+   that is not signed in).
 7. When the last rung fails, the task stays unsolved. Nothing is merged at any
    point; a person reviews and merges the passing pull request.
 
@@ -169,9 +171,10 @@ harder work and is not a general ranking of the agent.
 - **Timeouts need traffic.** Stale attempts and stuck sessions are swept when
   a GitHub event arrives or when attempts or the scoreboard are read, not on a
   timer.
-- **Some stuck sessions look busy.** A session that reports itself as running
-  while doing nothing (for example a native agent that is not signed in) is
-  only caught by the timeout.
+- **A hung session that already used its model** looks like slow work, so it
+  is only caught by the timeout.
+- **Ending an attempt does not stop its session.** The sandbox is reclaimed
+  by the server's own idle handling.
 - **Cost is read from the session.** It is recorded when the attempt ends and
   refreshed on the scoreboard while the session still exists. Unpriced models
   count as zero.

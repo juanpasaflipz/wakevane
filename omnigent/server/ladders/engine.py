@@ -66,12 +66,15 @@ class SessionState:
     :param updated_at: Epoch seconds of the session's last activity.
     :param pending_approvals: Approval prompts nobody has answered.
     :param error: The session's last task error, if any.
+    :param model_tokens: Tokens the session's models have read and written
+        so far; ``None`` when usage could not be read.
     """
 
     status: str | None
     updated_at: int
     pending_approvals: int = 0
     error: str | None = None
+    model_tokens: int | None = None
 
 
 #: Starts one session and reports how the launch ended.
@@ -246,6 +249,14 @@ class LadderEngine:
             return AttemptStatus.LAUNCH_FAILED.value, f"the session failed{reason}"
         if now - state.updated_at < SESSION_SETTLE_SECONDS:
             return None
+        if state.model_tokens == 0:
+            # Quiet and its model never answered, whatever status it reports:
+            # typically an agent that is not signed in to its provider.
+            return (
+                AttemptStatus.LAUNCH_FAILED.value,
+                "the session never used its model; the agent may not be signed in "
+                "or the model may not be available to it",
+            )
         if state.pending_approvals > 0 or state.status == "waiting":
             return (
                 AttemptStatus.LAUNCH_FAILED.value,
