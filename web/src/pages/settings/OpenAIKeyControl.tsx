@@ -11,6 +11,7 @@ import {
   deleteOpenAIKey,
   fetchOpenAIKeyStatus,
   saveOpenAIKey,
+  saveOpenAIKeyModels,
   type OpenAIKeyStatus,
 } from "@/lib/providerKeysApi";
 
@@ -19,16 +20,27 @@ const CONNECTED_HELP =
 const UNCONNECTED_HELP =
   "Add your own OpenAI API key so new sessions can run Codex in your sandboxes. OpenAI bills you directly for that usage.";
 
+const MODEL_HELP =
+  "Leave the model empty for the default. Your OpenAI organization must offer the model you name.";
+
+/** The single model the card edits; a key saved with several keeps its first. */
+function savedModel(status: OpenAIKeyStatus): string {
+  return status.models[0] ?? "";
+}
+
 export function OpenAIKeyControl() {
   const [status, setStatus] = useState<OpenAIKeyStatus | null | "loading">("loading");
   const [draft, setDraft] = useState("");
+  const [model, setModel] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     void (async () => {
       try {
-        setStatus(await fetchOpenAIKeyStatus());
+        const loaded = await fetchOpenAIKeyStatus();
+        setStatus(loaded);
+        if (loaded) setModel(savedModel(loaded));
       } catch {
         setStatus(null);
       }
@@ -39,7 +51,9 @@ export function OpenAIKeyControl() {
     setBusy(true);
     setError(null);
     try {
-      setStatus(await action());
+      const next = await action();
+      setStatus(next);
+      setModel(savedModel(next));
       setDraft("");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Something went wrong.");
@@ -51,6 +65,10 @@ export function OpenAIKeyControl() {
   // Nothing to show while loading, or when the server does not offer provider keys.
   if (status === "loading" || status === null) return null;
 
+  const models = model.trim() === "" ? [] : [model.trim()];
+  const modelChanged = model.trim() !== savedModel(status);
+  const modelOnly = status.connected && draft.trim() === "";
+
   return (
     <div className="flex flex-col gap-3" data-testid="openai-key-control">
       <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
@@ -60,8 +78,8 @@ export function OpenAIKeyControl() {
           className="flex-1"
           description={
             status.connected
-              ? `Key ending in ${status.key_hint} is saved. ${CONNECTED_HELP}`
-              : UNCONNECTED_HELP
+              ? `Key ending in ${status.key_hint} is saved. ${CONNECTED_HELP} ${MODEL_HELP}`
+              : `${UNCONNECTED_HELP} ${MODEL_HELP}`
           }
         />
         {status.connected && (
@@ -81,7 +99,7 @@ export function OpenAIKeyControl() {
         className="flex flex-wrap items-center gap-2"
         onSubmit={(event) => {
           event.preventDefault();
-          void run(() => saveOpenAIKey(draft));
+          void run(() => (modelOnly ? saveOpenAIKeyModels(models) : saveOpenAIKey(draft, models)));
         }}
       >
         <Input
@@ -94,14 +112,25 @@ export function OpenAIKeyControl() {
           disabled={busy}
           onChange={(event) => setDraft(event.target.value)}
         />
+        <Input
+          type="text"
+          autoComplete="off"
+          spellCheck={false}
+          aria-label="Codex model"
+          placeholder="Codex model (default)"
+          className="h-9 min-w-44 flex-1"
+          value={model}
+          disabled={busy}
+          onChange={(event) => setModel(event.target.value)}
+        />
         <Button
           type="submit"
           size="sm"
           className="h-9"
-          disabled={busy || draft.trim() === ""}
+          disabled={busy || (modelOnly ? !modelChanged : draft.trim() === "")}
           data-testid="openai-key-save"
         >
-          {status.connected ? "Replace key" : "Save key"}
+          {modelOnly ? "Save model" : status.connected ? "Replace key" : "Save key"}
         </Button>
       </form>
       {error && (

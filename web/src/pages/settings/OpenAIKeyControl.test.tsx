@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const api = vi.hoisted(() => ({
   fetchOpenAIKeyStatus: vi.fn(),
   saveOpenAIKey: vi.fn(),
+  saveOpenAIKeyModels: vi.fn(),
   deleteOpenAIKey: vi.fn(),
 }));
 
@@ -42,10 +43,44 @@ describe("OpenAIKeyControl", () => {
     await user.type(field, KEY);
     await user.click(screen.getByTestId("openai-key-save"));
 
-    expect(api.saveOpenAIKey).toHaveBeenCalledWith(KEY);
+    expect(api.saveOpenAIKey).toHaveBeenCalledWith(KEY, []);
     expect(await screen.findByText(/Key ending in 9f2c is saved/)).toBeInTheDocument();
     expect(screen.getByLabelText("Replacement OpenAI API key")).toHaveValue("");
     expect(screen.queryByText(new RegExp(KEY))).toBeNull();
+  });
+
+  it("saves a key together with the model it should run", async () => {
+    const user = userEvent.setup();
+    api.fetchOpenAIKeyStatus.mockResolvedValue(NONE);
+    api.saveOpenAIKey.mockResolvedValue({ ...SAVED, models: ["model-a"] });
+    render(<OpenAIKeyControl />);
+
+    await user.type(await screen.findByLabelText("OpenAI API key"), KEY);
+    await user.type(screen.getByLabelText("Codex model"), " model-a ");
+    await user.click(screen.getByTestId("openai-key-save"));
+
+    expect(api.saveOpenAIKey).toHaveBeenCalledWith(KEY, ["model-a"]);
+    await waitFor(() => expect(screen.getByLabelText("Codex model")).toHaveValue("model-a"));
+  });
+
+  it("changes the model of a saved key without asking for the key again", async () => {
+    const user = userEvent.setup();
+    api.fetchOpenAIKeyStatus.mockResolvedValue({ ...SAVED, models: ["model-a"] });
+    api.saveOpenAIKeyModels.mockResolvedValue({ ...SAVED, models: ["model-b"] });
+    render(<OpenAIKeyControl />);
+
+    const field = await screen.findByLabelText("Codex model");
+    expect(field).toHaveValue("model-a");
+    const save = screen.getByTestId("openai-key-save");
+    expect(save).toBeDisabled();
+    await user.clear(field);
+    await user.type(field, "model-b");
+    expect(save).toHaveTextContent("Save model");
+    await user.click(save);
+
+    expect(api.saveOpenAIKeyModels).toHaveBeenCalledWith(["model-b"]);
+    expect(api.saveOpenAIKey).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByLabelText("Codex model")).toHaveValue("model-b"));
   });
 
   it("removes a saved key", async () => {

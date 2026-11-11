@@ -33,8 +33,11 @@ inference profile gains a provider named `your-openai-key`, bound to the
 
 - An operator binding always wins. A harness the operator bound keeps its
   provider, and nothing is added when both Codex harnesses are bound.
-- The model list defaults to the build's Codex launch default. The API accepts
-  an optional `models` list to use instead.
+- The model defaults to the build's Codex launch default. The card's **Codex
+  model** field names another model id to use instead, and can be changed
+  without pasting the key again. OpenAI must offer that model to the key's
+  organization, with a rate limit large enough for Codex's requests. A model
+  change applies to sessions created afterwards.
 - Child sessions inherit the profile, so an orchestrator's Codex worker gets
   the binding.
 - A session created before the key was saved is unchanged. So is a session
@@ -61,6 +64,7 @@ later launches from receiving it; it does not reach into a running sandbox.
 
 - `GET /v1/provider-keys/openai` — `{connected, key_hint, models, updated_at}`.
 - `PUT /v1/provider-keys/openai` — body `{"api_key": "...", "models": []}`.
+- `PATCH /v1/provider-keys/openai` — body `{"models": []}`; keeps the saved key.
 - `DELETE /v1/provider-keys/openai`.
 
 Each acts on the caller's own key.

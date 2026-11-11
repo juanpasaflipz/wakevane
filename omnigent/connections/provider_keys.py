@@ -70,3 +70,13 @@ class OpenAIKeyStore(ConnectionStore[UserProviderKey]):
             metadata={"key_hint": api_key[-_KEY_HINT_CHARS:], "models": list(models)},
         )
         return self._to_entity(conn)
+
+    def set_models(self, user_id: str, models: tuple[str, ...]) -> UserProviderKey | None:
+        """Change the saved key's model restriction, keeping the key itself.
+
+        :returns: The updated key, or ``None`` when the user has no readable key.
+        """
+        current = self.get(user_id, with_tokens=True)
+        if current is None or current.api_key is None:
+            return None
+        return self.upsert(user_id, api_key=current.api_key, models=models)

@@ -159,6 +159,38 @@ async def test_routes_reject_bad_input_without_storing_it(
     assert store.get("owner") is None
 
 
+async def test_models_change_without_resending_the_key(
+    client: httpx.AsyncClient, store: OpenAIKeyStore
+) -> None:
+    owner = {"x-test-user": "owner"}
+    missing = await client.patch(
+        "/v1/provider-keys/openai", headers=owner, json={"models": ["model-a"]}
+    )
+    assert missing.status_code == 404 and store.get("owner") is None
+
+    await client.put("/v1/provider-keys/openai", headers=owner, json={"api_key": _KEY})
+    changed = await client.patch(
+        "/v1/provider-keys/openai", headers=owner, json={"models": [" model-a "]}
+    )
+    assert changed.status_code == 200 and _KEY not in changed.text
+    assert changed.json()["models"] == ["model-a"]
+    assert changed.json()["key_hint"] == _KEY[-4:]
+    assert store.get("owner", with_tokens=True).api_key == _KEY
+
+    # An empty list goes back to the deployment default; a bad id changes nothing.
+    rejected = await client.patch(
+        "/v1/provider-keys/openai", headers=owner, json={"models": ["bad model id"]}
+    )
+    assert rejected.status_code == 422 and store.get("owner").models == ("model-a",)
+    cleared = await client.patch("/v1/provider-keys/openai", headers=owner, json={"models": []})
+    assert cleared.json()["models"] == []
+    # The key itself is not accepted on this route.
+    extra = await client.patch(
+        "/v1/provider-keys/openai", headers=owner, json={"models": [], "api_key": _KEY}
+    )
+    assert extra.status_code == 422
+
+
 async def test_routes_require_a_signed_in_account(client: httpx.AsyncClient) -> None:
     assert (await client.get("/v1/provider-keys/openai")).status_code == 401
 
