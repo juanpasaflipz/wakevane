@@ -133,6 +133,23 @@ def _sender_login(payload: dict[str, Any]) -> str | None:
     return None
 
 
+def _head_branch(subject: dict[str, Any]) -> str | None:
+    """
+    Branch a pull request or check ran on, e.g. ``"fix/login"``.
+
+    A pull request carries it as ``head.ref``, a check suite as
+    ``head_branch`` and a check run under its ``check_suite``.
+    """
+    candidates = (
+        subject.get("head_branch"),
+        (subject.get("head") or {}).get("ref") if isinstance(subject.get("head"), dict) else None,
+        (subject.get("check_suite") or {}).get("head_branch")
+        if isinstance(subject.get("check_suite"), dict)
+        else None,
+    )
+    return next((value for value in candidates if isinstance(value, str) and value), None)
+
+
 def _pull_request_numbers(payload: dict[str, Any], subject: dict[str, Any]) -> list[int]:
     """
     Pull request numbers an event concerns.
@@ -172,8 +189,8 @@ def normalize_github_event(
     name for ``push``. ``fields`` is a flat dict of the scalars subscriptions
     match against: ``repo`` (``owner/name``), ``action``, ``conclusion``,
     ``status``, ``name``, ``pull_request`` (number — the first when several),
-    ``issue`` (number), ``sender``, ``ref`` and ``url`` (the subject's
-    ``html_url``). Absent values are omitted.
+    ``issue`` (number), ``head_branch``, ``sender``, ``ref`` and ``url`` (the
+    subject's ``html_url``). Absent values are omitted.
 
     :param event_name: The ``X-GitHub-Event`` header value.
     :param payload: The decoded JSON body.
@@ -213,6 +230,9 @@ def normalize_github_event(
     issue = payload.get("issue")
     if isinstance(issue, dict) and isinstance(issue.get("number"), int):
         fields["issue"] = issue["number"]
+    head_branch = _head_branch(subject)
+    if head_branch is not None:
+        fields["head_branch"] = head_branch
     sender = _sender_login(payload)
     if sender is not None:
         fields["sender"] = sender

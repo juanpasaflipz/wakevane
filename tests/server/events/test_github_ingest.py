@@ -302,3 +302,24 @@ def test_webhook_rejects_malformed_bodies(body: dict[str, Any]) -> None:
 
     assert client.post("/v1/events/webhook", json=body).status_code == 422
     assert bus.events == []
+
+
+@pytest.mark.parametrize(
+    ("event", "subject_key", "subject"),
+    [
+        ("pull_request", "pull_request", {"number": 5, "head": {"ref": "fix/login"}}),
+        ("check_suite", "check_suite", {"head_branch": "fix/login", "conclusion": "success"}),
+        (
+            "check_run",
+            "check_run",
+            {"name": "unit", "check_suite": {"head_branch": "fix/login"}},
+        ),
+    ],
+)
+def test_head_branch_is_read_from_each_event_shape(
+    event: str, subject_key: str, subject: dict[str, Any]
+) -> None:
+    action = "opened" if event == "pull_request" else "completed"
+    normalized = normalize_github_event(event, {"action": action, subject_key: subject})
+    assert normalized is not None
+    assert normalized[1]["head_branch"] == "fix/login"
