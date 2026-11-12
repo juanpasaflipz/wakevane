@@ -25,6 +25,16 @@ export function readLastAgentId(): string | null {
   }
 }
 
+/** Forget the stored pick so the next visit starts on the default agent. */
+export function clearLastAgentId(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // Storage access errors shouldn't break the composer.
+  }
+}
+
 /**
  * Persist `agentId` as the user's last explicit agent pick. Swallows
  * quota/access errors so a failed write can't break session creation.
