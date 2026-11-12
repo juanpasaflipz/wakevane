@@ -72,7 +72,7 @@ const DISPLAY_NAMES: Record<string, string> = {
   debby: "Debby",
 };
 
-function displayNameForAgent(name: string, harness?: string | null): string {
+export function displayNameForAgent(name: string, harness?: string | null): string {
   return (
     nativeCodingAgentForHarness(harness)?.displayName ??
     nativeCodingAgentForAgentName(name)?.displayName ??
