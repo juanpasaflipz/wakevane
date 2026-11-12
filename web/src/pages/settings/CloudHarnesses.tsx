@@ -6,6 +6,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { CheckCircle2Icon, KeyRoundIcon } from "lucide-react";
 import { Link } from "@/lib/routing";
 import { Button } from "@/components/ui/button";
+import { CLOUD_INCLUDED_HARNESSES, CLOUD_OWN_KEY_HARNESSES } from "@/lib/cloudHarnesses";
 import { fetchOpenAIKeyStatus, type OpenAIKeyStatus } from "@/lib/providerKeysApi";
 
 export interface CloudHarnessEntry {
@@ -14,11 +15,6 @@ export interface CloudHarnessEntry {
   description: string;
   icon: ReactNode;
 }
-
-// Agents the operator's own model access runs in a sandbox.
-const INCLUDED_HARNESSES = new Set(["claude-native"]);
-// Agents that run in a sandbox on a key the member supplies.
-const OWN_KEY_HARNESSES = new Set(["codex-native"]);
 
 function Card({ entry, children }: { entry: CloudHarnessEntry; children: ReactNode }) {
   return (
@@ -85,8 +81,10 @@ export function CloudHarnesses({ entries }: { entries: CloudHarnessEntry[] }) {
     };
   }, []);
 
-  const included = entries.filter((entry) => INCLUDED_HARNESSES.has(entry.harness));
-  const ownKey = keyStatus ? entries.filter((entry) => OWN_KEY_HARNESSES.has(entry.harness)) : [];
+  const included = entries.filter((entry) => CLOUD_INCLUDED_HARNESSES.has(entry.harness));
+  const ownKey = keyStatus
+    ? entries.filter((entry) => CLOUD_OWN_KEY_HARNESSES.has(entry.harness))
+    : [];
   const available = new Set([...included, ...ownKey].map((entry) => entry.harness));
   const unavailable = entries.filter((entry) => !available.has(entry.harness));
 

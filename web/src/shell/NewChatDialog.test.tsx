@@ -11312,6 +11312,27 @@ describe("NewChatLandingScreen bundle-agent Smart Routing", () => {
     );
   });
 
+  it("lists only cloud-runnable harnesses and names the agent on a hosted deployment", async () => {
+    mockAgents([
+      testAgent("ag_polly", "polly", { display_name: "Polly", harness: "pi", builtin: true }),
+      ...DEFAULT_LANDING_AGENTS,
+      testAgent("a3", "cursor-native-ui", { display_name: "Cursor", harness: "cursor-native" }),
+    ]);
+    localStorage.setItem(LAST_AGENT_KEY, "ag_polly");
+    renderLanding({
+      managed_sandboxes_enabled: true,
+      features: { web_only: true },
+    } as Partial<ServerInfo>);
+
+    const chip = screen.getByTestId("new-chat-landing-agent-select");
+    await waitFor(() => expect(chip.textContent).toContain("Polly"));
+    fireEvent.pointerDown(chip, { button: 0 });
+    expect(screen.getByTestId("new-chat-landing-agent-a1")).toBeInTheDocument();
+    expect(screen.getByTestId("new-chat-landing-agent-a2")).toBeInTheDocument();
+    // Cursor has no binary or credential in a sandbox, so it is not offered.
+    expect(screen.queryByTestId("new-chat-landing-agent-a3")).toBeNull();
+  });
+
   describe("a specialist agent", () => {
     const POLLY = testAgent("ag_polly", "polly", { display_name: "Polly", harness: "pi" });
     const REVIEW = testAgent("ag_review", "egm-review", {

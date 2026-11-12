@@ -332,6 +332,7 @@ import {
 import { BrandLogo } from "@/components/BrandLogo";
 import { PoweredByOmnigent } from "@/components/PoweredByOmnigent";
 import { PromptExamples } from "@/components/PromptExamples";
+import { runsInCloudSandbox } from "@/lib/cloudHarnesses";
 import { SkillPills } from "@/components/SkillPills";
 import { ComposerMicButton } from "@/components/ComposerMicButton";
 import type { CostControlMode } from "@/components/CostRoutingControl";
@@ -351,8 +352,28 @@ import { promoteSessionDraft, recoverFailedSessionDraft } from "@/lib/sessionDra
 const AGENT_PICKER_DESCRIPTIONS: Record<string, string> = {
   polly: "Multi-agent coding",
   debby: "Multi-agent debate",
-  "egm-review": "Reviews a design document",
+  "egm-review": "Reviews designs",
 };
+
+/**
+ * Lead the picker chip with the agent's name, e.g. ``"Polly · model-a"``: a
+ * model id alone does not tell a newcomer that the chip chooses the agent.
+ */
+function withAgentName(text: string, agentName: string): string {
+  if (text === "" || agentName === "" || text.startsWith(agentName)) return text;
+  return `${agentName} · ${text}`;
+}
+
+/**
+ * The name to lead the chip with: a composed agent's, since its icon is generic.
+ * A harness row is already identified by its own icon and keeps the bare model.
+ */
+function composedAgentName(
+  agent: Pick<AvailableAgent, "name" | "harness"> | null | undefined,
+  label: string,
+): string {
+  return agent == null || isNativeCodingAgent(agent) || isAcpHarnessAgent(agent) ? "" : label;
+}
 
 /** A single-purpose agent, listed apart and never remembered as the default. */
 function isSpecialistAgent(agent: Pick<AvailableAgent, "workflow_kind">): boolean {
@@ -1893,7 +1914,20 @@ export function AgentHarnessPicker({
         disabled: disabledLabel !== undefined || previewOnly || !hasAgents,
         "aria-busy": loading || undefined,
         label: disabledLabel ?? visibleCachedPreview?.label ?? triggerAccessibleName,
-        model: disabledLabel ?? visibleCachedPreview?.model ?? triggerText,
+        model:
+          disabledLabel ??
+          (visibleCachedPreview
+            ? withAgentName(
+                visibleCachedPreview.model,
+                composedAgentName(
+                  visibleCachedPreview.agent,
+                  visibleCachedPreview.label.split(",")[0] ?? "",
+                ),
+              )
+            : withAgentName(
+                triggerText,
+                hasAgents ? composedAgentName(selectedEntry, agentLabel) : "",
+              )),
         effort:
           disabledLabel === undefined
             ? (visibleCachedPreview?.effort ?? triggerSecondaryText)
@@ -2490,6 +2524,15 @@ export function NewChatLandingScreen() {
     // A browser-only deploy (`web_only`) runs everything in managed sandboxes,
     // so the sandbox pick is the default rather than a connected host.
     () => restoredDraft?.sandboxSelected ?? isFeatureEnabled(info, "web_only"),
+  );
+  // A hosted, sandbox-only deployment lists only the harnesses a sandbox can run.
+  const cloudOnlyHarnesses = sandboxSelected && isFeatureEnabled(info, "web_only");
+  const pickerHarnessEntries = useMemo(
+    () =>
+      cloudOnlyHarnesses
+        ? harnessEntries.filter((agent) => runsInCloudSandbox(agent.harness))
+        : harnessEntries,
+    [cloudOnlyHarnesses, harnessEntries],
   );
   // Provider the sandbox pick launches on. Seeded to the sticky last pick (or
   // the first offered row) once the picker rows load; null both before that
@@ -7259,7 +7302,7 @@ export function NewChatLandingScreen() {
                       <AgentHarnessPicker
                         openNonce={modelPickerOpenNonce}
                         agentEntries={agentEntries}
-                        harnessEntries={harnessEntries}
+                        harnessEntries={pickerHarnessEntries}
                         blockedReasons={sandboxSelected ? sandboxBlockedReasons : undefined}
                         onPrefetchEntries={prefetchSandboxPreviews}
                         effectiveAgentId={effectiveAgentId}
