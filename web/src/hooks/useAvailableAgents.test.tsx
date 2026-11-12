@@ -1513,3 +1513,37 @@ it("labels only the marked EGM template and omits run snapshots from discovery",
   expect(result.current.data?.some((a) => a.id === "snapshot")).toBe(false);
   expect(result.current.data?.some((a) => a.id === "import")).toBe(true);
 });
+
+it("marks agents discovered from a session a subscription launched", async () => {
+  routeFetch({
+    [BUILTINS_URL]: mockResponse({ data: [], has_more: false }),
+    [MINE_URL]: mockResponse({
+      data: [
+        {
+          id: "woken",
+          agent_id: "ladder-agent",
+          agent_name: "ladder-fixer-acme-repo",
+          created_at: 2,
+          updated_at: 2,
+          permission_level: 4,
+          labels: { "omnigent.launched_by": "subscription" },
+        },
+        {
+          id: "typed",
+          agent_id: "own-agent",
+          agent_name: "my-reviewer",
+          created_at: 1,
+          updated_at: 1,
+          permission_level: 4,
+          labels: {},
+        },
+      ],
+      has_more: false,
+    }),
+  });
+  const { result } = renderHook(() => useAvailableAgents(), { wrapper });
+  await waitFor(() => expect(result.current.isSuccess).toBe(true));
+  // Still discoverable (a subscription can reuse it), but flagged for pickers.
+  expect(result.current.data?.find((a) => a.id === "ladder-agent")?.wokenByEvent).toBe(true);
+  expect(result.current.data?.find((a) => a.id === "own-agent")?.wokenByEvent).toBeUndefined();
+});

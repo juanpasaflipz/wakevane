@@ -11333,6 +11333,27 @@ describe("NewChatLandingScreen bundle-agent Smart Routing", () => {
     expect(screen.queryByTestId("new-chat-landing-agent-a3")).toBeNull();
   });
 
+  it("does not offer an agent that a subscription wakes for a hand-typed task", async () => {
+    mockAgents([
+      testAgent("ag_polly", "polly", { display_name: "Polly", harness: "pi", builtin: true }),
+      testAgent("ag_own", "my-reviewer", { display_name: "My reviewer", harness: "pi" }),
+      testAgent("ag_woken", "ladder-fixer-acme-repo", {
+        display_name: "Ladder-fixer-acme-repo",
+        harness: "pi",
+        wokenByEvent: true,
+      }),
+    ]);
+    localStorage.setItem(LAST_AGENT_KEY, "ag_polly");
+    renderLanding();
+
+    const chip = screen.getByTestId("new-chat-landing-agent-select");
+    await waitFor(() => expect(chip.textContent).toContain("Polly"));
+    fireEvent.pointerDown(chip, { button: 0 });
+    fireEvent.click(screen.getByTestId("new-chat-landing-custom-agents"));
+    expect(await screen.findByTestId("new-chat-landing-agent-ag_own")).toBeInTheDocument();
+    expect(screen.queryByTestId("new-chat-landing-agent-ag_woken")).toBeNull();
+  });
+
   describe("a specialist agent", () => {
     const POLLY = testAgent("ag_polly", "polly", { display_name: "Polly", harness: "pi" });
     const REVIEW = testAgent("ag_review", "egm-review", {

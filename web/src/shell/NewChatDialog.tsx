@@ -2525,6 +2525,12 @@ export function NewChatLandingScreen() {
     // so the sandbox pick is the default rather than a connected host.
     () => restoredDraft?.sandboxSelected ?? isFeatureEnabled(info, "web_only"),
   );
+  // An agent a subscription wakes is not offered for a hand-typed task, unless
+  // it is already the selection.
+  const pickerAgentEntries = useMemo(
+    () => agentEntries.filter((agent) => !agent.wokenByEvent || agent.id === pickedAgentId),
+    [agentEntries, pickedAgentId],
+  );
   // A hosted, sandbox-only deployment lists only the harnesses a sandbox can run.
   const cloudOnlyHarnesses = sandboxSelected && isFeatureEnabled(info, "web_only");
   const pickerHarnessEntries = useMemo(
@@ -7301,7 +7307,7 @@ export function NewChatLandingScreen() {
                     the selected entry's submenu owns run configuration. */}
                       <AgentHarnessPicker
                         openNonce={modelPickerOpenNonce}
-                        agentEntries={agentEntries}
+                        agentEntries={pickerAgentEntries}
                         harnessEntries={pickerHarnessEntries}
                         blockedReasons={sandboxSelected ? sandboxBlockedReasons : undefined}
                         onPrefetchEntries={prefetchSandboxPreviews}

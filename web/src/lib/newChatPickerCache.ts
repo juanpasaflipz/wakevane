@@ -38,6 +38,7 @@ const pickerAgentSchema = agentSchema.extend({
   builtin: z.boolean().optional(),
   workflow_kind: z.literal("egm-template").nullable().optional(),
   acpHarness: z.boolean().optional(),
+  wokenByEvent: z.boolean().optional(),
   mine: z.literal(true).optional(),
 });
 const modelOptionSchema = z.object({
