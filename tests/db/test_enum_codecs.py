@@ -107,7 +107,7 @@ def test_shipped_codes_are_stable() -> None:
     }
     assert ec.ITEM_STATUS == {"completed": 1, "in_progress": 2, "incomplete": 3, "failed": 4}
     assert ec.COMMENT_STATUS == {"draft": 1, "addressed": 2}
-    assert ec.ACCOUNT_TOKEN_KIND == {"invite": 1, "magic": 2}
+    assert ec.ACCOUNT_TOKEN_KIND == {"invite": 1, "magic": 2, "verify": 3}
     assert ec.POLICY_TYPE == {"python": 1, "url": 2}
     assert ec.POLICY_SCOPE == {"default": 1, "session": 2}
     assert ec.HOST_STATUS == {"online": 1, "offline": 2}

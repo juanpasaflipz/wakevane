@@ -121,6 +121,11 @@ _ALT_COVERED: frozenset[str] = frozenset(
         # behavior they exercise is unique.
         "chat_model",
         "coding_supervisor_openai",
+        # Design review is covered below the e2e layer by tests/server/test_egm*.py;
+        # the shim janitor by tests/server/test_shims_route.py. Neither name is a
+        # valid ``test_example_<name>.py`` fit without a live provider run.
+        "egm",
+        "shim-janitor",
         # Test-only fixtures under tests/resources/agents/ that
         # don't have test_example_<name>.py files — these are
         # loaded ad-hoc by specific test files (e.g.

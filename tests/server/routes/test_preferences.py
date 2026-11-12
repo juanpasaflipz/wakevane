@@ -34,7 +34,7 @@ async def test_authenticated_preference_operations(db_uri, tmp_path, monkeypatch
     # Exercise positional auth while keeping preference_store keyword-only.
     app = (
         create_app(
-            *stores, *([None] * 6), provider, preference_store=store, preference_policy=policy
+            *stores, *([None] * 7), provider, preference_store=store, preference_policy=policy
         )
         if auth_mode == "positional"
         else create_app(

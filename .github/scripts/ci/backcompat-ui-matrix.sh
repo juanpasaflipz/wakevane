@@ -17,7 +17,7 @@
 set -euo pipefail
 
 _valid_version() {
-  [ "$1" = "main" ] || [[ "$1" =~ ^v?[0-9]+\.[0-9]+(\.[0-9]+)?([a-z0-9.]*)?$ ]]
+  [ "$1" = "main" ] || [[ "$1" =~ ^v?[0-9]+\.[0-9]+(\.[0-9]+)?([a-z0-9.-]*)?$ ]]
 }
 
 MIN_VERSION="${BACKCOMPAT_MIN_VERSION:-0.9.0}"

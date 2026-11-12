@@ -101,6 +101,12 @@ async def test_info_returns_expected_fields(client: httpx.AsyncClient) -> None:
         "splittable_terminal_view_ui": False,
         "shims_page": True,
         "subscriptions_page": True,
+        "egm_template": False,
+        "egm_cloud": False,
+        "egm_cloud_coding": False,
+        "billing": False,
+        "web_only": False,
+        "sandbox_provider_keys": False,
     }
     # Compatibility field for frontend builds predating the nested map.
     assert data["harness_install_enabled"] is False
