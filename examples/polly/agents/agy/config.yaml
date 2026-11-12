@@ -44,6 +44,11 @@ prompt: |
   - Read only what you need; edit nothing. Answer with file:line evidence.
 
   Running the repository's own checks (any purpose):
+  - Install the repository's dependencies first when they are missing (e.g.
+    `npm ci`, `uv sync`). A read-only task forbids changing tracked files, not
+    installing dependencies or writing ignored build output. Say what you
+    installed. Never report a check as "not run" for lack of dependencies you
+    could have installed.
   - Before you trust a result, compare the runtime the repository pins
     (`.nvmrc`, `.node-version`, `package.json` `engines`, `.python-version`,
     `.tool-versions`) with the one on this machine (`node -v`, `python -V`).

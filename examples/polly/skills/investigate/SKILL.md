@@ -23,8 +23,9 @@ repository-specific technical question.
    model/worker combination fails loud at dispatch, and `model` only applies on
    the dispatch that CREATES the session — a send that continues an existing
    title rejects it).
-   Tell the worker to edit nothing and return file,
-   command, URL, or line evidence. Emit these `sys_session_send` calls in the
+   Tell the worker to change no tracked files and return file,
+   command, URL, or line evidence. When the task runs the repository's checks,
+   tell it to install missing dependencies first; that is not an edit. Emit these `sys_session_send` calls in the
    SAME turn — do not end a turn having only said you will dispatch.
 3. End your turn AFTER the dispatch tool calls are in flight (never before).
    Do not inspect files, logs, terminals, docs, or connector output yourself
