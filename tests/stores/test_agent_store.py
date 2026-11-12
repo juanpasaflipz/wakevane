@@ -920,8 +920,15 @@ def test_agent_updates_are_workspace_scoped(agent_store: SqlAlchemyAgentStore) -
         assert agent_store.get(agent.id) == other
 
 
+def _require_egm(agent_store) -> None:
+    """Design review is offered only on SQLite and PostgreSQL."""
+    if not agent_store.supports_egm:
+        pytest.skip("design review is not supported on this database")
+
+
 def test_egm_ownership_snapshot_and_takeover(agent_store, artifact_store):
     """Unmarked deterministic identities stay custom; snapshots survive template takeover."""
+    _require_egm(agent_store)
     import hashlib
 
     from omnigent.db.utils import builtin_agent_id
@@ -992,6 +999,7 @@ def test_egm_seed_import_race(agent_store):
 
 
 def test_egm_hidden_before_pagination_and_revision_cas(agent_store):
+    _require_egm(agent_store)
     from omnigent.db.utils import builtin_agent_id
 
     row = agent_store.seed_egm("old", None)
@@ -1009,6 +1017,7 @@ def test_egm_hidden_before_pagination_and_revision_cas(agent_store):
 def test_egm_offline_cleanup_retains_referenced_snapshot(
     agent_store, artifact_store, conversation_store
 ):
+    _require_egm(agent_store)
     import hashlib
 
     from omnigent.server.egm import cleanup_abandoned_snapshots, snapshot_agent

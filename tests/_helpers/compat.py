@@ -250,7 +250,9 @@ def release_tuple(version: str) -> tuple[int, ...]:
     :param version: A version string, e.g. ``"0.1.2.dev0"`` or ``"0.1.1"``.
     :returns: The release tuple, e.g. ``(0, 1, 2)`` or ``(0, 1, 1)``.
     """
-    return Version(version).release
+    # A distribution tag such as ``0.20.0-flywheel.1`` is not PEP 440; its
+    # release is everything before the hyphen.
+    return Version(version.split("-", 1)[0]).release
 
 
 def meets_min_version(actual: str, required: str) -> bool:

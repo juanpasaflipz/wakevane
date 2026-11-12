@@ -15,20 +15,40 @@ branch_labels = None
 depends_on = None
 
 
-def upgrade() -> None:
-    with op.batch_alter_table("users") as batch_op:
-        batch_op.add_column(sa.Column("email_key", sa.String(254), nullable=True))
-        batch_op.add_column(sa.Column("email_verified_at", sa.Integer(), nullable=True))
-        batch_op.create_index("ix_users_email_key", ["workspace_id", "email_key"])
+_KIND_CHECK = "ck_account_tokens_kind"
+
+
+def _replace_kind_check(expression: str) -> None:
+    bind = op.get_bind()
+    if bind.dialect.name != "cockroachdb":
+        with op.batch_alter_table("account_tokens") as batch_op:
+            batch_op.drop_constraint(_KIND_CHECK, type_="check")
+            batch_op.create_check_constraint(_KIND_CHECK, expression)
+        return
+    # CRDB frees a dropped constraint's name only at commit; the existence
+    # check lets startup resume if it stops between the drop and the create.
+    checks = sa.inspect(bind).get_check_constraints("account_tokens")
+    if _KIND_CHECK in {check["name"] for check in checks}:
+        with op.batch_alter_table("account_tokens") as batch_op:
+            batch_op.drop_constraint(_KIND_CHECK, type_="check")
+        bind.commit()
     with op.batch_alter_table("account_tokens") as batch_op:
-        batch_op.drop_constraint("ck_account_tokens_kind", type_="check")
-        batch_op.create_check_constraint("ck_account_tokens_kind", "kind IN (1, 2, 3)")
+        batch_op.create_check_constraint(_KIND_CHECK, expression)
+
+
+def upgrade() -> None:
+    bind = op.get_bind()
+    columns = {column["name"] for column in sa.inspect(bind).get_columns("users")}
+    if "email_key" not in columns:
+        with op.batch_alter_table("users") as batch_op:
+            batch_op.add_column(sa.Column("email_key", sa.String(254), nullable=True))
+            batch_op.add_column(sa.Column("email_verified_at", sa.Integer(), nullable=True))
+            batch_op.create_index("ix_users_email_key", ["workspace_id", "email_key"])
+    _replace_kind_check("kind IN (1, 2, 3)")
 
 
 def downgrade() -> None:
-    with op.batch_alter_table("account_tokens") as batch_op:
-        batch_op.drop_constraint("ck_account_tokens_kind", type_="check")
-        batch_op.create_check_constraint("ck_account_tokens_kind", "kind IN (1, 2)")
+    _replace_kind_check("kind IN (1, 2)")
     with op.batch_alter_table("users") as batch_op:
         batch_op.drop_index("ix_users_email_key")
         batch_op.drop_column("email_verified_at")

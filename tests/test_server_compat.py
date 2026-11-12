@@ -23,6 +23,7 @@ from tests._helpers import compat
         ("0.1.2rc1", (0, 1, 2)),
         ("1.2.3.post4", (1, 2, 3)),
         ("2.0", (2, 0)),
+        ("0.20.0-flywheel.1", (0, 20, 0)),
     ],
 )
 def test_release_tuple_ignores_suffixes(version: str, expected: tuple[int, ...]) -> None:
