@@ -165,6 +165,7 @@ from omnigent.server.managed_hosts import (
     RepoWorkspace,
     host_resume_supported,
     host_sandbox_is_running,
+    host_wakes_on_message,
     parse_repo_workspace,
     read_managed_repo_workspaces,
 )
@@ -13952,7 +13953,7 @@ async def _get_session_snapshot(
     if host_store is not None and sandbox_config is not None and conv.host_id is not None:
         host_for_resume = await asyncio.to_thread(host_store.get_host, conv.host_id)
         if host_for_resume is not None:
-            host_resumable = host_resume_supported(host_for_resume, sandbox_config)
+            host_resumable = host_wakes_on_message(host_for_resume, sandbox_config)
     response = _build_session_response(
         conv,
         items,

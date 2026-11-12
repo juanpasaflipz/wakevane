@@ -3732,6 +3732,40 @@ async def test_host_resume_supported_requires_resumable_matching_launcher(db_uri
     assert host_resume_supported(no_sandbox, _injected_config(resumable)) is False
 
 
+async def test_host_wakes_on_message_covers_relaunchable_providers(db_uri: str) -> None:
+    """A non-resumable managed sandbox still comes back on the next message."""
+    from omnigent.server.managed_hosts import host_wakes_on_message
+
+    host_store = HostStore(db_uri)
+    modal_host = host_store.register_managed_host(
+        host_id="5b1c6a0f9d2e4c8f8a7b3e1d2c4f6a8b",
+        name="managed-relaunch-gate",
+        user_id=_OWNER,
+        token="tok-relaunch-gate",
+        provider="modal",
+        sandbox_id="sb-relaunch-gate",
+        token_expires_at=now_epoch() + 3600,
+    )
+    # Not resumable in place, but the matching launcher can relaunch it.
+    relauncher = FakeSandboxLauncher(can_resume=False)
+    assert host_resume_supported(modal_host, _injected_config(relauncher)) is False
+    assert host_wakes_on_message(modal_host, _injected_config(relauncher)) is True
+
+    # A resumable provider wakes in place; a dropped or mismatched config does not.
+    islo_host = host_store.register_managed_host(
+        host_id="7d2e5f1a3b4c4d6e9f0a1b2c3d4e5f60",
+        name="managed-resume-gate-2",
+        user_id=_OWNER,
+        token="tok-resume-gate-2",
+        provider="islo",
+        sandbox_id="sb-resume-gate-2",
+        token_expires_at=now_epoch() + 3600,
+    )
+    assert host_wakes_on_message(islo_host, _injected_config(_IsloFakeLauncher(can_resume=True)))
+    assert host_wakes_on_message(modal_host, None) is False
+    assert host_wakes_on_message(modal_host, _injected_config(_IsloFakeLauncher())) is False
+
+
 async def test_resume_managed_host_wakes_same_sandbox_and_refreshes_token(db_uri: str) -> None:
     """A resumable managed host wakes in place under the same sandbox id."""
     host_store = HostStore(db_uri)

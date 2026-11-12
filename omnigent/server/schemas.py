@@ -2188,9 +2188,10 @@ class SessionResponse(BaseModel):
         ``runner_online`` is ``False`` — host alive ⇒ "send a
         message to wake the runner"; host dead ⇒ "reconnect /
         fork". Never participates in the reachability decision.
-    :param host_resumable: Whether this session is bound to a dormant
-        managed host the server can wake in place (its provider sets
-        :attr:`SandboxLauncher.can_resume`). The open view reads it only
+    :param host_resumable: Whether the next message brings this session's
+        managed host back: woken in place when its provider can resume, or
+        relaunched as a fresh sandbox with the session's repositories
+        otherwise. The open view reads it only
         when ``host_online`` is ``False``, to split a confirmed host-down
         into a recoverable "asleep" state (send a message — the relaunch
         path resumes the sandbox) versus the terminal ``host_offline``

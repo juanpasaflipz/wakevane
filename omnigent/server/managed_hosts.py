@@ -4345,10 +4345,8 @@ def host_resume_supported(
     stop/resume lifecycle with a persistent volume
     (:attr:`SandboxLauncher.can_resume`) and still matches the deployment's
     current launcher. This is the SAME gate :func:`resume_managed_host`
-    applies before a wake, exposed so the open-session snapshot
-    (``SessionResponse.host_resumable``) can render a dormant such host as a
-    wakeable "asleep" state instead of the terminal ``host_offline``
-    dead-end.
+    applies before a wake. :func:`host_wakes_on_message` builds on it for
+    the open-session snapshot (``SessionResponse.host_resumable``).
 
     :param host: The session's bound managed host.
     :param config: The deployment's current sandbox config, or ``None``
@@ -4363,6 +4361,29 @@ def host_resume_supported(
         and launcher.capabilities.resume_stopped
         and host.sandbox_id is not None
     )
+
+
+def host_wakes_on_message(
+    host: Host,
+    config: ManagedSandboxDeployment | None,
+) -> bool:
+    """
+    Whether the next message to a session on this host brings it back.
+
+    A resumable provider wakes the stopped sandbox in place; any other
+    managed provider whose launcher still matches gets a fresh sandbox
+    under the same host identity, with the session's recorded repositories
+    cloned again (the message-dispatch relaunch path). Either way the
+    session is not stranded, so the open view should keep the composer open.
+
+    :param host: The session's bound host.
+    :param config: The deployment's current sandbox config, or ``None``.
+    :returns: ``False`` for an external host or a managed host whose
+        provider is no longer configured.
+    """
+    if host_resume_supported(host, config):
+        return True
+    return host.sandbox_provider is not None and _launcher_for_teardown(host, config) is not None
 
 
 def host_sandbox_is_running(
