@@ -6760,6 +6760,8 @@ export function NewChatLandingScreen() {
           >
             {selectedAgent?.workflow_kind === "egm-template" && (
               <p role="note" className="px-4 py-2 text-sm text-muted-foreground">
+                {"Design review checks a design document before it is built. " +
+                  "For everyday tasks, choose another agent in the agent menu. "}
                 {sandboxSelected && cloudDesignReviewEnabled
                   ? "Runs in a WakeVane cloud workspace pinned to the branch's current commit. " +
                     "It keeps running if you close this tab, and review results are saved to " +
@@ -7524,7 +7526,9 @@ export function NewChatLandingScreen() {
             </Button>
           </div>
         ) : null}
-        {message.length === 0 ? (
+        {/* General task examples would mislead on a design review, which only
+            reviews a design document. */}
+        {message.length === 0 && selectedAgent?.workflow_kind !== "egm-template" ? (
           <PromptExamples
             skills={pillSkills.map((skill) => skill.name)}
             onPick={(prompt) => {

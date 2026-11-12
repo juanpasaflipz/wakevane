@@ -589,9 +589,10 @@ class ReviewOutputGate:
             )
         if status["state"] == "drafting":
             return (
-                "Design review incomplete: no revision has been frozen. Runtime ready=false. "
-                "Use existing repository evidence and complete the three review stages. "
-                "Exported drafts have not passed review."
+                "Design review has not started: no design has been submitted for review "
+                "yet, so nothing is approved for implementation and nothing was changed. "
+                "This agent only reviews a design document through its three review "
+                "stages. For any other task, start a new session with a different agent."
             )
         pending = [r["stage"] for r in status["reviews"] if r["error"] == "pending"]
         if pending and not status["blockers"]:
