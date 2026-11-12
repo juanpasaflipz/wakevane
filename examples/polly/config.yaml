@@ -78,9 +78,10 @@ prompt: |
   `claude_code` -> `claude-native`, `codex` -> `codex-native`, `opencode` ->
   `opencode-native`, `cursor` -> `cursor-native`, `hermes` -> `hermes-native`,
   `agy` -> `antigravity-native`, and `pi` -> `pi`. A worker is AVAILABLE when
-  its readiness value is exactly `true`, or `"needs-auth"`: the host sees no
-  local credential, but a session can supply one (a hosted sandbox injects it
-  per launch), so dispatch and let a real auth failure fail loud. `false`,
+  its readiness value is exactly `true`. `"needs-auth"` means the host has no
+  credential for it, so it would fail at launch: do not dispatch to it. The one
+  exception: if NO worker at all reads `true`, treat the `"needs-auth"` workers
+  as available and let a real auth failure fail loud. `false`,
   `"binary-missing"` and `"version-too-low"` mean it cannot boot on this host.
   If `configured_harnesses` is absent or `null` (the session has
   no bound host, or the readiness lookup failed), readiness is UNKNOWN — fall
@@ -97,10 +98,16 @@ prompt: |
   don't end the turn on the preflight alone). The preflight is SILENT internal
   plumbing: do not announce it, explain it, or report its result in chat — when
   every worker resolves, say nothing about the roster and get straight to the
-  task. A missing worker is the ONLY roster fact worth words: it is not
-  launchable on this machine — do not dispatch to it, and tell the human which
-  workers are unavailable and why (e.g. `needs-auth`) so they can install or
-  authenticate the missing CLI if they want it.
+  task. Never dispatch to an unavailable worker. Mention an unavailable worker
+  only when it changes what the human gets: they asked for that worker by name,
+  or the task needs more workers or vendors than are available. Then say which
+  one and why (e.g. `needs-auth`) in one sentence. Otherwise leave the roster
+  out of the conversation and the final report.
+
+  Final report. Report what the human asked for: the answer, the evidence, and
+  what could not be done and why. Leave out your own housekeeping (worktrees
+  you created, scratch files, tool directories, which worker ran which step)
+  unless it affects the result or the human asked about it.
 
   Unattended approvals. `claude_code` runs without approval prompts only on a
   model Claude Code's auto mode supports (Opus 4.6 or later, Sonnet 4.6 or

@@ -453,7 +453,12 @@ def _family_provider_configured(harness: str) -> bool:
         provider entry is present for the harness's family, else ``False``.
     """
     try:
-        provider = default_provider_for_harness(load_config(), harness)
+        config = load_config()
+        # An inference binding names the harness's provider outright (a managed
+        # sandbox's profile does this), so it wins over any family default.
+        provider = _bound_provider(config, harness) or default_provider_for_harness(
+            config, harness
+        )
         if provider is None:
             return False
         unusable = (
@@ -470,6 +475,13 @@ def _family_provider_configured(harness: str) -> bool:
         # Class-only: provider config errors may embed credential material.
         _logger.debug("readiness: provider check failed for %r (%s)", harness, type(exc).__name__)
         return False
+
+
+def _bound_provider(config: dict[str, object], harness: str) -> ProviderEntry | None:
+    """The provider an inference binding assigns to *harness*, or ``None`` when unbound."""
+    from omnigent.inference_config import resolve_bound_provider
+
+    return resolve_bound_provider(config, harness, allow_empty=True)
 
 
 def _family_fallback_provider_configured(harness: str) -> bool:
