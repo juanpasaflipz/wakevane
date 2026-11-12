@@ -19,10 +19,10 @@ STAGES = ("comprehension", "critic", "readiness")
 
 
 def enabled(spec) -> bool:
+    # A spec without a guardrails section never opted into design review.
+    guardrails = getattr(spec, "guardrails", None)
     return bool(
-        spec
-        and spec.guardrails
-        and any(p.function and p.function.path == POLICY for p in spec.guardrails.policies)
+        guardrails and any(p.function and p.function.path == POLICY for p in guardrails.policies)
     )
 
 

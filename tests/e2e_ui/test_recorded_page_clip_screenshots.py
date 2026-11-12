@@ -181,9 +181,9 @@ def test_recorded_jpeg_clip_preserves_quality_and_path(
     [
         pytest.param({"type": "png", "quality": 80}, True, id="png-quality"),
         pytest.param({"quality": 0}, True, id="implicit-png-quality"),
-        pytest.param({"type": "webp"}, True, id="unsupported-format"),
+        pytest.param({"type": "gif"}, True, id="unsupported-format"),
         pytest.param({"type": ""}, True, id="empty-format"),
-        pytest.param({"path": "probe.webp"}, True, id="unsupported-extension"),
+        pytest.param({"path": "probe.gif"}, True, id="unsupported-extension"),
         pytest.param({"path": "probe"}, True, id="missing-extension"),
         pytest.param({"type": "jpeg", "quality": -1}, True, id="negative-quality"),
         pytest.param({"type": "jpeg", "quality": 101}, True, id="excessive-quality"),

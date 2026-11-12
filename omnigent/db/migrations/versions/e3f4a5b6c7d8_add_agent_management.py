@@ -20,4 +20,5 @@ def downgrade() -> None:
         .first()
     ):
         raise RuntimeError("Retain agent management while protected EGM rows exist")
-    op.drop_column("agents", "managed_by")
+    with op.batch_alter_table("agents") as batch_op:
+        batch_op.drop_column("managed_by")

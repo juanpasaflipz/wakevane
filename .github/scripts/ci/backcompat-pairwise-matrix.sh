@@ -30,7 +30,7 @@ set -euo pipefail
 # A version token is "main" or a release tag (vX.Y[.Z][pre/dev suffix]). Anything
 # else is rejected so it can't break the matrix JSON or reach a `git worktree add`.
 _valid_version() {
-  [ "$1" = "main" ] || [[ "$1" =~ ^v?[0-9]+\.[0-9]+(\.[0-9]+)?([a-z0-9.]*)?$ ]]
+  [ "$1" = "main" ] || [[ "$1" =~ ^v?[0-9]+\.[0-9]+(\.[0-9]+)?([a-z0-9.-]*)?$ ]]
 }
 
 # Minimum release the backcompat matrix tests against. v0.2.0 is the first

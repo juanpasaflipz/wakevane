@@ -79,7 +79,7 @@ no harness-specific tests exist. No passing per-harness results are implied.
 
 | Checklist ID | Bench dimensions | Existing automation / remaining gap |
 | --- | --- | --- |
-| `launch-reply` | `basic_turn`, `streaming`, `cost_tracking` | Also check authored instructions for custom agents via the [native instruction recipe](./native-harnesses.md#driving-it-with-the-repro-environment); bench replies alone do not prove delivery. Server/runner observations; browser launch/rendering and exact-once presentation need the owning UI tests. |
+| `launch-reply` | `basic_turn`, `streaming`, `cost_tracking`, `cost_per_solved_task` | Also check authored instructions for custom agents via the [native instruction recipe](./native-harnesses.md#driving-it-with-the-repro-environment); bench replies alone do not prove delivery. Server/runner observations; browser launch/rendering and exact-once presentation need the owning UI tests. |
 | `working-status` | — | No shared status-continuity probe. Use the [native working-status recipe](./native-harnesses.md#driving-it-with-the-repro-environment) for Claude OSC/file fallback and UI status routing; SDK lifecycle and other natives need their own evidence. A completed basic turn does not prove quiet-work or blocked-state accuracy. |
 | `tool-history` | `tool_calling` | Tool round trip only. Later-turn recall is not a shared probe; reuse the Pi scenarios below and identify other harness coverage explicitly. |
 | `model-effort` | `model_override`, `reasoning` | Native-TUI model override is currently skipped; SDK routing/reasoning observations are narrower than selection persistence. Reasoning output does not prove outgoing effort, tool continuity, High→Low or UI state. |

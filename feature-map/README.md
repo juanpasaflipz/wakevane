@@ -11,8 +11,6 @@ run. It deliberately omits implementation details such as selectors, test IDs,
 CSS classes, and source paths. Discover those at run time from the code and
 the referenced tests; they change faster than the user journey.
 
-- [Design review](egm.md): opt-in EGM launch, continuation and compatibility.
-
 ## Skills
 
 Read the relevant skill file directly when its capability is needed:
@@ -114,6 +112,9 @@ user-visible behavior. It then uses exactly these four H2 sections in order:
 [Keeping the map current](#keeping-the-map-current) for everything it enforces.
 
 ## Features
+
+- [Design review](./egm.md) covers opt-in EGM launch, continuation and
+  compatibility.
 
 - [Workspace content search](./workspace-content-search.md) covers runner-backed
   text search, result navigation and its release flag.

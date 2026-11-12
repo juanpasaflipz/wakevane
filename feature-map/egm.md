@@ -27,9 +27,9 @@ from New Chat, without importing a bundle. It is initially disabled.
 
 ## Driving it with the repro environment
 
-Follow [Verify Omnigent](skills/verify-omnigent/SKILL.md). Use an isolated test
-repository and configured mock provider. Enable egm_template on the server
-before startup. Create docs/designs/egm in the scratch repository beforehand.
+Preconditions: follow [Verify Omnigent](skills/verify-omnigent/SKILL.md). Use an
+isolated test repository and configured mock provider. Enable egm_template on the
+server before startup. Create docs/designs/egm in the scratch repository beforehand.
 
 1. With the flag disabled, confirm the entry is absent. Enable it and restart;
    confirm Design review appears after Debby and ordinary egm imports remain listed.
@@ -53,7 +53,7 @@ before startup. Create docs/designs/egm in the scratch repository beforehand.
    a run snapshot is refused. Deleting/replacing the template does not remove the
    saved artifacts of existing runs.
 
-## Proof and coverage
+## Gotchas
 
 Store tests cover collision races, immutable snapshots, takeover, revision checks
 and filtering. Backend tests cover disabled continuation, read-only rejection,
