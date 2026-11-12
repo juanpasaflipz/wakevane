@@ -16,6 +16,7 @@
  */
 
 import { stripBasePath, withBasePath } from "./basePath";
+import { noteSignedInAccount } from "./accountScopedStorage";
 import { getCachedServerInfo } from "./capabilities";
 import {
   getOmnigentHostConfig,
@@ -432,6 +433,7 @@ async function probeIdentity(): Promise<boolean> {
       };
       currentUserId = data.user_id;
       currentIsAdmin = data.is_admin ?? false;
+      noteSignedInAccount(currentUserId);
       return true;
     }
     return !isTransientIdentityStatus(res.status);
