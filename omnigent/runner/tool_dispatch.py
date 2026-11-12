@@ -5109,7 +5109,33 @@ async def _host_harnesses_or_none(
         readiness = resp.json().get("configured_harnesses")
     except Exception:  # noqa: BLE001
         return None
-    return readiness if isinstance(readiness, dict) else None
+    return _with_session_inference_bindings(readiness) if isinstance(readiness, dict) else None
+
+
+def _with_session_inference_bindings(readiness: _JsonObject) -> _JsonObject:
+    """Count a harness this session's inference profile binds as signed in.
+
+    The host daemon cannot see a per-session profile, so it reports a bound
+    harness as ``"needs-auth"`` although the profile supplies its credential
+    at launch. An unbound harness, and any other reason, is left as reported.
+
+    :param readiness: The host's map, e.g. ``{"claude-native": "needs-auth"}``.
+    :returns: The map with bound ``"needs-auth"`` entries set to ``True``.
+    """
+    if not os.environ.get("OMNIGENT_INFERENCE_CONFIG"):
+        return readiness
+    from omnigent.inference_config import binding_for_harness, load_runtime_inference_config
+
+    try:
+        config = load_runtime_inference_config()
+        return {
+            harness: True
+            if state == "needs-auth" and binding_for_harness(config, harness) is not None
+            else state
+            for harness, state in readiness.items()
+        }
+    except Exception:  # noqa: BLE001 - readiness is best-effort; keep the host's view
+        return readiness
 
 
 async def _session_get_info_via_rest(
