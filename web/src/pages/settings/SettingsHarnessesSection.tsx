@@ -35,6 +35,7 @@ import {
   type HarnessCredentialKind,
 } from "@/lib/harnessSetup";
 import { NATIVE_CODING_AGENTS } from "@/lib/nativeCodingAgents";
+import { CloudHarnesses } from "./CloudHarnesses";
 import { BackButton, HarnessCatalog } from "./HarnessCatalog";
 import { HarnessFixDialog, type HarnessFixMode } from "./HarnessFixDialog";
 import { useSettingsRoute } from "../../shell/settingsNav";
@@ -93,6 +94,26 @@ function hostHarnessKey(hostId: string, harness: string): string {
  * grid. Host selection lives here so it survives grid ↔ details navigation.
  */
 export const SettingsHarnessesSection = () => {
+  const info = useServerInfo();
+  // A sandbox-only deployment has no host whose installed agents could be shown.
+  if (isFeatureEnabled(info, "web_only")) {
+    return (
+      <div className="@container">
+        <CloudHarnesses
+          entries={HARNESS_ENTRIES.map((entry) => ({
+            harness: entry.harness,
+            name: entry.name,
+            description: entry.description,
+            icon: <ComposerAgentIcon agent={{ name: entry.agentName, harness: entry.harness }} />,
+          }))}
+        />
+      </div>
+    );
+  }
+  return <HostHarnessesSection />;
+};
+
+const HostHarnessesSection = () => {
   const { harness } = useSettingsRoute();
   const [query, setQuery] = useState("");
   const [installedOnly, setInstalledOnly] = useState(false);
