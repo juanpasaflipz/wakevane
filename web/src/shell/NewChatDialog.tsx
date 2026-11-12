@@ -331,6 +331,7 @@ import {
 } from "@/lib/composerMentions";
 import { BrandLogo } from "@/components/BrandLogo";
 import { PoweredByOmnigent } from "@/components/PoweredByOmnigent";
+import { PromptExamples } from "@/components/PromptExamples";
 import { SkillPills } from "@/components/SkillPills";
 import { ComposerMicButton } from "@/components/ComposerMicButton";
 import type { CostControlMode } from "@/components/CostRoutingControl";
@@ -7522,6 +7523,15 @@ export function NewChatLandingScreen() {
               Import your recent sessions
             </Button>
           </div>
+        ) : null}
+        {message.length === 0 ? (
+          <PromptExamples
+            skills={pillSkills.map((skill) => skill.name)}
+            onPick={(prompt) => {
+              setMessage(prompt);
+              textareaRef.current?.focus();
+            }}
+          />
         ) : null}
       </div>
 
