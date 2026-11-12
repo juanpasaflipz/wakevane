@@ -33,6 +33,7 @@ import {
   KeyboardShortcutTooltipContent,
 } from "@/components/KeyboardShortcut";
 import { useLocation, useNavigate, useParams, useRebasePath } from "@/lib/routing";
+import { displayNameForAgent } from "@/hooks/useAvailableAgents";
 import { Button } from "@/components/ui/button";
 import {
   ChatComposer,
@@ -2399,6 +2400,13 @@ function ComposerImpl(
   // explains *why* this specific row can't receive input.
   const isReadOnly =
     readOnlyReason !== null || (permissionLevel === 1 && sendDisabledReason === null);
+  // The session can only be brought back by reconnecting, and this viewer may.
+  const showReconnectRow =
+    unreachable &&
+    sendDisabledReason === null &&
+    !isReadOnly &&
+    !composerLockedByBtw &&
+    onShowReconnectHelp !== undefined;
   // A pending elicitation addressed to this session parks the turn
   // server-side (the runner blocks on the verdict Future), so a message
   // sent now would sit queued and unread until the card is answered —
@@ -3739,7 +3747,7 @@ function ComposerImpl(
               : isReadOnly
                 ? "You have read-only access to this session"
                 : unreachable && sendDisabledReason === null
-                  ? "Session offline — reconnect below to continue"
+                  ? "Session offline — reconnect to continue"
                   : hasPendingElicitation
                     ? "Respond to the pending request above to continue"
                     : disabled && sendDisabledReason === null
@@ -3898,6 +3906,25 @@ function ComposerImpl(
               />
               {/* Inline slash-command feedback: errors and /help output */}
               {commandError !== null && <ComposerFeedbackRow>{commandError}</ComposerFeedbackRow>}
+              {/* An offline session says how to bring it back, in plain sight. */}
+              {showReconnectRow && (
+                <ComposerFeedbackRow
+                  className="flex flex-wrap items-center gap-x-3 gap-y-1"
+                  data-testid="composer-reconnect-row"
+                >
+                  <span>This session's workspace has shut down.</span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7"
+                    onClick={onShowReconnectHelp}
+                    data-testid="composer-reconnect"
+                  >
+                    Reconnect
+                  </Button>
+                </ComposerFeedbackRow>
+              )}
             </>
           ),
         }}
@@ -4005,6 +4032,13 @@ function ComposerImpl(
                   // asleep/starting/unknown. Only read-only viewers and sessions
                   // no message can wake (unreachable) get an inert gear.
                   disabled={isReadOnly || unreachable}
+                  disabledReason={
+                    isReadOnly
+                      ? "You have read-only access to this session"
+                      : unreachable
+                        ? "Session offline. Reconnect to change its settings."
+                        : undefined
+                  }
                   openNonce={pickerOpenNonce}
                 />
               </div>
@@ -4639,6 +4673,7 @@ function SessionHarnessPicker({
   modelLabelHostId,
   costRoutingEligible,
   disabled,
+  disabledReason,
   openNonce = 0,
 }: {
   busy: boolean;
@@ -4658,6 +4693,8 @@ function SessionHarnessPicker({
   modelLabelHostId: string | null | undefined;
   costRoutingEligible: boolean;
   disabled: boolean;
+  /** Shown as the chip's tooltip while it is inert, e.g. why it is off. */
+  disabledReason?: string;
   openNonce?: number;
 }) {
   const isMobile = useIsMobileViewport();
@@ -4711,13 +4748,23 @@ function SessionHarnessPicker({
     showEffort,
   });
   const effortLabel = showEffort && !routingOn ? formatStatusEffortLabel(selectedEffort) : null;
-  const label = routingOn
+  const modelOrHarnessLabel = routingOn
     ? SMART_ROUTING_LABEL
     : modelLabelLoading
       ? ""
       : compactModelTriggerLabel(
           modelSummary ?? nativeAgent?.displayName ?? harnessLabel ?? "Session",
         );
+  // A composed agent's icon is generic, so its chip leads with the agent's
+  // name; a harness is already named by its own icon.
+  const composedAgentLabel =
+    nativeAgent === undefined && agentName ? displayNameForAgent(agentName) : null;
+  const label =
+    composedAgentLabel !== null &&
+    modelOrHarnessLabel !== "" &&
+    modelOrHarnessLabel !== composedAgentLabel
+      ? `${composedAgentLabel} · ${modelOrHarnessLabel}`
+      : modelOrHarnessLabel;
   const availableEfforts =
     modelPickerKind === "codex"
       ? codexEffortLevelsForModel(codexModelOptions, pickerSelectedModel)
@@ -4915,7 +4962,17 @@ function SessionHarnessPicker({
           (sessionModelSeeded || pendingModelChange !== null) &&
           (modelPickerKind === "claude" || modelPickerKind === "codex"),
       }}
-      tooltip={<ComposerConfigTooltipRows rows={summary} />}
+      tooltip={
+        <>
+          {/* An inert chip says why it is off, then still shows the settings. */}
+          {disabled && disabledReason ? (
+            <p className="pb-1" data-testid="composer-config-gear-disabled-reason">
+              {disabledReason}
+            </p>
+          ) : null}
+          <ComposerConfigTooltipRows rows={summary} />
+        </>
+      }
       tooltipTestId="composer-config-gear-tooltip"
       testId="composer-agent-menu"
     >

@@ -2022,6 +2022,20 @@ describe("Composer model/effort label", () => {
     expect(within(label()).getByText("High")).toHaveClass("text-muted-foreground");
   });
 
+  it("leads with the agent's name for a composed agent, whose icon is generic", () => {
+    useChatStore.setState({ llmModel: "model-a", sessionHarness: "claude-sdk" });
+    renderWithTooltips(
+      <Composer
+        {...composerProps({
+          agents: [{ id: "a1", name: "polly" }],
+          selectedAgentId: "a1",
+          showModels: true,
+        })}
+      />,
+    );
+    expect(label()).toHaveTextContent("Polly · model-a");
+  });
+
   it("shows no effort when the session uses its default", () => {
     useChatStore.setState({
       llmModel: "opus",
@@ -3850,7 +3864,34 @@ describe("Composer placeholder", () => {
     // below is the only affordance.
     render(<Composer {...composerProps({ unreachable: true })} />);
     expect(textarea().disabled).toBe(true);
-    expect(textarea().placeholder).toMatch(/reconnect below/i);
+    expect(textarea().placeholder).toMatch(/reconnect to continue/i);
+    // No way to reconnect was supplied, so no button promises one.
+    expect(screen.queryByTestId("composer-reconnect")).toBeNull();
+  });
+
+  it("offers a visible Reconnect button while the session is unreachable", () => {
+    const onShowReconnectHelp = vi.fn();
+    render(<Composer {...composerProps({ unreachable: true, onShowReconnectHelp })} />);
+
+    fireEvent.click(screen.getByTestId("composer-reconnect"));
+    expect(onShowReconnectHelp).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows no Reconnect button on a reachable session or to a read-only viewer", () => {
+    const onShowReconnectHelp = vi.fn();
+    const { rerender } = render(<Composer {...composerProps({ onShowReconnectHelp })} />);
+    expect(screen.queryByTestId("composer-reconnect")).toBeNull();
+
+    rerender(
+      <Composer
+        {...composerProps({
+          unreachable: true,
+          onShowReconnectHelp,
+          readOnlyReason: "This session is archived",
+        })}
+      />,
+    );
+    expect(screen.queryByTestId("composer-reconnect")).toBeNull();
   });
 });
 
@@ -5640,6 +5681,8 @@ describe("Composer config gear", () => {
     fireEvent.focus(gear()!);
     const tip = await screen.findByTestId("composer-config-gear-tooltip");
     expect(tip.textContent).toContain("Model:");
+    // And it says why the chip does nothing when clicked.
+    expect(tip.textContent).toContain("Session offline. Reconnect to change its settings.");
   });
 
   it("shows a hover summary with Harness/Model/Effort rows and no Permissions row", async () => {
