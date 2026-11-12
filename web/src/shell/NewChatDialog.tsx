@@ -225,6 +225,7 @@ import {
 import { CLAUDE_NATIVE_MODELS } from "@/lib/claudeNativeModels";
 import {
   isAcpHarnessAgent,
+  isEventWokenAgent,
   partitionAgentsByKind,
   selectableSessionAgents,
 } from "@/lib/agentGrouping";
@@ -2528,7 +2529,7 @@ export function NewChatLandingScreen() {
   // An agent a subscription wakes is not offered for a hand-typed task, unless
   // it is already the selection.
   const pickerAgentEntries = useMemo(
-    () => agentEntries.filter((agent) => !agent.wokenByEvent || agent.id === pickedAgentId),
+    () => agentEntries.filter((agent) => !isEventWokenAgent(agent) || agent.id === pickedAgentId),
     [agentEntries, pickedAgentId],
   );
   // A hosted, sandbox-only deployment lists only the harnesses a sandbox can run.

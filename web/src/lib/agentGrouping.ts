@@ -138,3 +138,21 @@ export function partitionAgentsByKind<T extends AvailableAgent>(
     customs: sorted.filter((a) => !isBuiltin(a)),
   };
 }
+
+// Name prefixes the server gives the agents it registers for a subscription:
+// a ladder's fixer and a factory's foreman, one per repository.
+const EVENT_WOKEN_NAME = /^(ladder-fixer|factory)-/;
+
+/**
+ * Whether an agent is built to be woken by a repository event rather than
+ * picked by hand for a typed task. Covers one discovered on a
+ * subscription-launched session and one the server registered under the
+ * member's account for a ladder or factory.
+ *
+ * @param agent - A picker candidate.
+ */
+export function isEventWokenAgent(
+  agent: Pick<AvailableAgent, "name" | "mine" | "wokenByEvent">,
+): boolean {
+  return agent.wokenByEvent === true || (agent.mine === true && EVENT_WOKEN_NAME.test(agent.name));
+}
