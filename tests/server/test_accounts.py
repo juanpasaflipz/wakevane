@@ -2488,7 +2488,8 @@ def test_credit_arrives_only_after_the_verification_link_is_opened(
     link = _verification_link(outbox)
     opened = _TC(app.app).get(link, follow_redirects=False)
     assert opened.status_code == 302
-    assert opened.headers["location"].endswith("/settings/billing?verified=1")
+    # Lands on the home page, never on a page that asks for payment.
+    assert opened.headers["location"] == "http://localhost:8000/?verified=1"
 
     after = carol.get("/v1/funded-trial").json()
     assert after["enabled"] is True and after["funding"] == "trial"

@@ -734,9 +734,10 @@ def create_accounts_auth_router(
     async def verify_email(request: Request) -> Response:
         """Consume a verification link, record it and issue the welcome credit.
 
-        Always redirects into Settings › Billing: ``?verified=1`` on success
-        (with ``&credit=0`` when verification succeeded but no credit was
-        issued), ``?verified=expired`` for a missing, used or stale link.
+        Success redirects to the home page with ``?verified=1`` (plus
+        ``&credit=0`` when no credit was issued). A missing, used or stale
+        link redirects to Settings › Billing with ``?verified=expired``, where
+        a new link can be sent.
         """
         target = f"{config.base_url}/settings/billing"
         token_id = request.query_params.get("t", "").strip()
@@ -788,7 +789,9 @@ def create_accounts_auth_router(
             granted,
         )
         suffix = "" if granted or not first_time else "&credit=0"
-        return RedirectResponse(url=f"{target}?verified=1{suffix}", status_code=302)
+        # Home, not billing: a mailed link that lands on a page asking for
+        # payment is the pattern browsers flag as phishing.
+        return RedirectResponse(url=f"{config.base_url}/?verified=1{suffix}", status_code=302)
 
     @router.post("/verify-email/resend")
     async def resend_verification(request: Request) -> Response:
