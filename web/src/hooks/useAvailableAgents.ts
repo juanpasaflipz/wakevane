@@ -60,6 +60,9 @@ export interface AvailableAgent {
   // session-discovered agents (custom uploads); absent on catalog agents
   // whose full data is already present from GET /v1/agents.
   sessionId?: string;
+  // Discovered from a session a subscription launched: an agent built to be
+  // woken by an event rather than picked by hand for a typed task.
+  wokenByEvent?: boolean;
 }
 
 const DISPLAY_NAMES: Record<string, string> = {
@@ -226,6 +229,7 @@ export function useSessionAgents(enabled = true) {
         skills: [],
         sessionId: row.id,
         created_at: row.created_at,
+        ...(row.labels?.["omnigent.launched_by"] ? { wokenByEvent: true } : {}),
       });
     }
     return [...agents.values()];
