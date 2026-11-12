@@ -156,3 +156,46 @@ async def test_discovery_reads_run_concurrently(monkeypatch: pytest.MonkeyPatch)
         )
     assert not timeouts
     assert arrived == {"/v1/agents", "/v1/sessions", "/v1/hosts/host_test"}
+
+
+def test_session_inference_binding_counts_as_signed_in(tmp_path, monkeypatch) -> None:
+    """A managed sandbox's per-session profile is invisible to the host daemon."""
+    from omnigent.runner.tool_dispatch import _with_session_inference_bindings
+
+    host_view = {"claude-native": "needs-auth", "pi": "needs-auth", "cursor-native": False}
+    # No session profile: the host's view stands.
+    monkeypatch.delenv("OMNIGENT_INFERENCE_CONFIG", raising=False)
+    assert _with_session_inference_bindings(host_view) == host_view
+
+    profile = tmp_path / "inference.json"
+    profile.write_text(
+        json.dumps(
+            {
+                "providers": {
+                    "operator": {
+                        "kind": "gateway",
+                        "anthropic": {"base_url": "https://gateway.example", "api_key": "k"},
+                    }
+                },
+                "inference": {
+                    "harnesses": {
+                        "claude-native": {
+                            "provider": "operator",
+                            "default_model": "model-a",
+                            "model_allowlist": ["model-a"],
+                        }
+                    }
+                },
+            }
+        )
+    )
+    monkeypatch.setenv("OMNIGENT_INFERENCE_CONFIG", str(profile))
+    # Bound and waiting on sign-in becomes ready; unbound and other states do not.
+    assert _with_session_inference_bindings(host_view) == {
+        "claude-native": True,
+        "pi": "needs-auth",
+        "cursor-native": False,
+    }
+
+    profile.write_text("not json")
+    assert _with_session_inference_bindings(host_view) == host_view
