@@ -723,3 +723,15 @@ def test_nonblocking_findings_advance_and_stay_on_record(review, kind):
     # The next stage opens on the same revision; the advice travels with the report.
     dispatch(ledger, packet, "critic")
     assert status["revision"] == 1
+
+
+def test_completion_before_any_design_is_submitted_reads_plainly(tmp_path, monkeypatch):
+    """A member who picked the review agent for an ordinary task is told what to do."""
+    from omnigent.runner.egm_review import ReviewOutputGate
+
+    monkeypatch.setattr("omnigent.process_logging.data_dir", lambda: tmp_path)
+    message = ReviewOutputGate("fresh", tmp_path).completion()
+    assert "has not started" in message and "nothing was changed" in message
+    assert "start a new session with a different agent" in message
+    # Never reads as an approval.
+    assert "ready for implementation" not in message

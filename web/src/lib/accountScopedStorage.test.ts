@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { noteSignedInAccount } from "./accountScopedStorage";
 
 const REPOS = "omnigent:last-sandbox-repos";
+const LAST_AGENT = "omnigent:last-agent-id";
 const UNRELATED = "omnigent:theme";
 
 beforeEach(() => {
@@ -11,6 +12,7 @@ beforeEach(() => {
     REPOS,
     JSON.stringify([{ url: "https://example.test/r", branch: "" }]),
   );
+  window.localStorage.setItem(LAST_AGENT, "agent-1");
   window.localStorage.setItem(UNRELATED, "dark");
 });
 
@@ -28,6 +30,7 @@ describe("noteSignedInAccount", () => {
     noteSignedInAccount("bob");
 
     expect(window.localStorage.getItem(REPOS)).toBeNull();
+    expect(window.localStorage.getItem(LAST_AGENT)).toBeNull();
     expect(window.localStorage.getItem(UNRELATED)).toBe("dark");
 
     // Bob's own later choices survive his next visit.

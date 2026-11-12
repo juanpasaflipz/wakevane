@@ -9,6 +9,7 @@ export const ACCOUNT_SCOPED_KEYS = [
   "omnigent:last-sandbox-repos",
   "omnigent:last-sandbox-repo",
   "omnigent:recent-workspaces",
+  "omnigent:last-agent-id",
 ] as const;
 
 /**
