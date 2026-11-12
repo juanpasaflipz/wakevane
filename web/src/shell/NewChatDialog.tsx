@@ -169,7 +169,7 @@ import {
 } from "./projectPrefill";
 import { getCliServerUrl, getOmnigentHostConfig } from "@/lib/host";
 import { quoteShellArgument } from "@/lib/shell";
-import { readLastAgentId, writeLastAgentId } from "@/lib/agentPreferences";
+import { clearLastAgentId, readLastAgentId, writeLastAgentId } from "@/lib/agentPreferences";
 import {
   readLastHostChoice,
   writeLastHostChoice,
@@ -351,7 +351,13 @@ import { promoteSessionDraft, recoverFailedSessionDraft } from "@/lib/sessionDra
 const AGENT_PICKER_DESCRIPTIONS: Record<string, string> = {
   polly: "Multi-agent coding",
   debby: "Multi-agent debate",
+  "egm-review": "Reviews a design document",
 };
+
+/** A single-purpose agent, listed apart and never remembered as the default. */
+function isSpecialistAgent(agent: Pick<AvailableAgent, "workflow_kind">): boolean {
+  return agent.workflow_kind === "egm-template";
+}
 
 // Agents whose bundled skills render as always-visible pills under the
 // landing composer. Deliberately an allowlist while the pattern proves
@@ -2069,7 +2075,13 @@ export function AgentHarnessPicker({
           )}
           {/* Agents group — built-in bundle agents (Polly / Debby) inline. */}
           <PickerSectionHeader>Agents</PickerSectionHeader>
-          {bundleEntries.map(renderEntry)}
+          {bundleEntries.filter((agent) => !isSpecialistAgent(agent)).map(renderEntry)}
+          {bundleEntries.some(isSpecialistAgent) && (
+            <>
+              <PickerSectionHeader>Specialist</PickerSectionHeader>
+              {bundleEntries.filter(isSpecialistAgent).map(renderEntry)}
+            </>
+          )}
           {/* Existing custom agents fold into an "Other..." submenu (with
             the pending upload and the create action). With no custom agents the
             submenu would hold only "Create custom agent", so we surface that as
@@ -3170,6 +3182,15 @@ export function NewChatLandingScreen() {
             ? cachedPickerOptions!.agent.id
             : (agentList[0]?.id ?? null);
   const effectiveAgentId = automaticHarnessFallback?.candidate?.value.id ?? defaultEffectiveAgentId;
+  // A specialist that was not picked in this visit (a pick remembered by an
+  // older build, or a restored draft) gives way to the default agent.
+  useEffect(() => {
+    if (agentExplicitlySelectedRef.current || agentFromConfigRef.current) return;
+    const picked = agentList.find((agent) => agent.id === pickedAgentId);
+    if (picked === undefined || !isSpecialistAgent(picked)) return;
+    if (readLastAgentId() === picked.id) clearLastAgentId();
+    setPickedAgentId(null);
+  }, [agentList, pickedAgentId]);
   const selectedAgent = useMemo<AvailableAgent | undefined>(
     () =>
       effectiveAgentId === PENDING_AGENT_ID && pendingAgent
@@ -5302,7 +5323,9 @@ export function NewChatLandingScreen() {
     // own choice: send it with the create rather than default-filling.
     agentFromConfigRef.current = false;
     setPickedAgentId(agent.id);
-    writeLastAgentId(agent.id);
+    // A specialist pick is for this session only; the next one starts on the
+    // member's usual agent.
+    if (!isSpecialistAgent(agent)) writeLastAgentId(agent.id);
     if (pickerEdits?.agentId !== agent.id) {
       setPickerEdits(
         pickerLoading

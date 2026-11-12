@@ -11312,6 +11312,45 @@ describe("NewChatLandingScreen bundle-agent Smart Routing", () => {
     );
   });
 
+  describe("a specialist agent", () => {
+    const POLLY = testAgent("ag_polly", "polly", { display_name: "Polly", harness: "pi" });
+    const REVIEW = testAgent("ag_review", "egm-review", {
+      display_name: "Design review",
+      harness: "claude-sdk",
+      workflow_kind: "egm-template",
+      // The server marks its seeded bundle agents as built in.
+      builtin: true,
+    });
+
+    it("is listed apart and is not remembered as the next session's agent", () => {
+      localStorage.setItem(LAST_AGENT_KEY, "ag_polly");
+      mockAgents([POLLY, REVIEW]);
+      renderLanding();
+
+      fireEvent.pointerDown(screen.getByTestId("new-chat-landing-agent-select"), { button: 0 });
+      expect(screen.getByText("Specialist")).toBeInTheDocument();
+      fireEvent.click(screen.getByTestId("new-chat-landing-agent-ag_review"));
+      closeMenu();
+
+      // Picked for this session, but the stored default is still the usual agent.
+      expect(screen.getByTestId("new-chat-landing-agent-select").textContent).toContain(
+        "Design review",
+      );
+      expect(localStorage.getItem(LAST_AGENT_KEY)).toBe("ag_polly");
+    });
+
+    it("gives way to the default when an older build remembered it", async () => {
+      localStorage.setItem(LAST_AGENT_KEY, "ag_review");
+      mockAgents([POLLY, REVIEW]);
+      renderLanding();
+
+      await waitFor(() =>
+        expect(screen.getByTestId("new-chat-landing-agent-select").textContent).toContain("Polly"),
+      );
+      expect(localStorage.getItem(LAST_AGENT_KEY)).toBeNull();
+    });
+  });
+
   it("preselects Smart Routing on a later visit", () => {
     localStorage.setItem(LAST_AGENT_KEY, "ag_debby");
     localStorage.setItem(LAST_HARNESS_KEY, JSON.stringify({ ag_debby: "auto" }));
