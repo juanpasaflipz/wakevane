@@ -412,6 +412,44 @@ def test_family_provider_configured_excludes_subscription(
     assert hrmod._family_provider_configured("claude-native") is False
 
 
+def test_family_provider_configured_honors_an_inference_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A managed sandbox binds a harness to a provider that is no family default."""
+    import omnigent.onboarding.harness_readiness as hrmod
+
+    config = {
+        "providers": {
+            "operator": {
+                "kind": "gateway",
+                "anthropic": {
+                    "base_url": "https://gateway.example/anthropic",
+                    "api_key_ref": "env:READINESS_TEST_OPERATOR_TOKEN",
+                },
+            }
+        },
+        "inference": {
+            "harnesses": {
+                "claude-native": {
+                    "provider": "operator",
+                    "default_model": "model-a",
+                    "model_allowlist": ["model-a"],
+                }
+            }
+        },
+    }
+    monkeypatch.setattr(hrmod, "load_config", lambda: config)
+
+    # The binding's credential is launch environment the daemon can read.
+    monkeypatch.setenv("READINESS_TEST_OPERATOR_TOKEN", "token")
+    assert hrmod._family_provider_configured("claude-native") is True
+    # A harness the profile leaves unbound gains nothing from it.
+    assert hrmod._family_provider_configured("pi") is False
+
+    monkeypatch.delenv("READINESS_TEST_OPERATOR_TOKEN")
+    assert hrmod._family_provider_configured("claude-native") is False
+
+
 def test_auth_aware_native_harness_launch_gate_stays_binary_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
