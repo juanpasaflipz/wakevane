@@ -322,6 +322,8 @@ class SqlUser(OmnigentBase):
     """
 
     __tablename__ = "users"
+    # Finds other accounts confirmed on the same mailbox.
+    __table_args__ = (Index("ix_users_email_key", "workspace_id", "email_key"),)
     account_generation: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     # Tenant partition key: Databricks workspace id owning this row (0 = default). Part of the PK.

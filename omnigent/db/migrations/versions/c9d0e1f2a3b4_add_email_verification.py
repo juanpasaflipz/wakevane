@@ -32,6 +32,7 @@ def _replace_kind_check(expression: str) -> None:
         with op.batch_alter_table("account_tokens") as batch_op:
             batch_op.drop_constraint(_KIND_CHECK, type_="check")
         bind.commit()
+        bind.execute(sa.text("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE"))
     with op.batch_alter_table("account_tokens") as batch_op:
         batch_op.create_check_constraint(_KIND_CHECK, expression)
 
