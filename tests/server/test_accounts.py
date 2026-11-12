@@ -1515,6 +1515,31 @@ def test_admin_can_delete_former_admin_when_others_exist(
     assert resp.status_code == 204, resp.text
 
 
+def test_member_still_being_billed_cannot_be_removed(accounts_app: TestClient) -> None:
+    """Removing an account does not cancel its subscription, so removal waits for that."""
+    from types import SimpleNamespace
+
+    from fastapi.testclient import TestClient as _TC
+
+    admin = _login(accounts_app, "admin", "admin-pw-12345")
+    for username in ("payer", "lapsed"):
+        invite_token = admin.post("/auth/invite", json={}).json()["token"]
+        _TC(accounts_app.app).post(
+            "/auth/register",
+            json={"invite": invite_token, "username": username, "password": "member-pw-1234"},
+        )
+    accounts_app.app.state.billing = SimpleNamespace(
+        has_live_subscription=lambda user_id: user_id == "payer"
+    )
+
+    refused = admin.delete("/auth/users/payer")
+    assert refused.status_code == 409
+    assert "still being billed" in refused.json()["error"]
+    listed = {user["id"] for user in admin.get("/auth/users").json()["users"]}
+    assert {"payer", "lapsed"} <= listed
+    assert admin.delete("/auth/users/lapsed").status_code == 204
+
+
 def test_admin_cannot_delete_last_admin(accounts_app: TestClient) -> None:
     """If only one admin exists, deleting them returns 400.
 

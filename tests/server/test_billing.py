@@ -294,6 +294,8 @@ def test_payment_failure_and_cancellation_stop_spending(billing: dict[str, Any])
         _event("invoice.payment_failed", {"subscription": "sub_1"}, "evt_fail"), "sig-ok"
     )
     assert policy.account("owner").seat_status == "past_due"  # type: ignore[union-attr]
+    # A past-due seat is still a subscription the provider bills.
+    assert policy.has_live_subscription("owner") and not policy.has_live_subscription("other")
     # Period credit stays usable while the period lasts; overage is revoked.
     assert _reserve(trial, "k-credit", 1.0).status == "reserved"
     assert [grant.kind for grant in trial.candidate_grants("owner")] == ["period_credit"]
@@ -306,6 +308,7 @@ def test_payment_failure_and_cancellation_stop_spending(billing: dict[str, Any])
         "sig-ok",
     )
     assert policy.account("owner").seat_status == "canceled"  # type: ignore[union-attr]
+    assert not policy.has_live_subscription("owner")
     with pytest.raises(FundedTrialDenied) as denied:
         _reserve(trial, "k-after", 1.0)
     assert denied.value.reason == "subscription_required"

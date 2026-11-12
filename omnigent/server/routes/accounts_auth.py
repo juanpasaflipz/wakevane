@@ -1151,6 +1151,17 @@ def create_accounts_auth_router(
         if user_id == admin_id:
             return JSONResponse(status_code=400, content={"error": "cannot delete self"})
 
+        # Removing the account does not stop the payment provider charging it.
+        billing = getattr(request.app.state, "billing", None)
+        if billing is not None and await asyncio.to_thread(billing.has_live_subscription, user_id):
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error": "This member has a subscription that is still being "
+                    "billed. Cancel it in the payment provider first, then remove them."
+                },
+            )
+
         owned_task_ids: list[str] = []
         if scheduled_task_store is not None:
             owned_task_ids = [t.id for t in scheduled_task_store.list(owner_user_id=user_id)]
