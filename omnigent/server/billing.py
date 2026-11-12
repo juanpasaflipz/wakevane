@@ -207,6 +207,15 @@ class BillingPolicy:
             return None
         return self.store.get_account(user_id)
 
+    def has_live_subscription(self, user_id: str) -> bool:
+        """Whether the payment provider is still billing a subscription for this user."""
+        account = self.account(user_id)
+        return (
+            account is not None
+            and bool(account.stripe_subscription_id)
+            and account.seat_status not in {"none", "canceled"}
+        )
+
     def funding_grants(self, user_id: str) -> list[TrialGrant]:
         """Subscription grants that may fund new work now, in spending order.
 
