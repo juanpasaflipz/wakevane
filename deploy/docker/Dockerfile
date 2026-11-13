@@ -231,6 +231,28 @@ RUN apt-get update \
       iproute2 nftables \
  && rm -rf /var/lib/apt/lists/*
 
+# Throwaway databases for repository tests: PostgreSQL from the PostgreSQL
+# project's own packages (Debian's lag a major version) and Redis. Nothing
+# starts on boot; `sandbox-services start` runs both on localhost. Local
+# connections trust any user: the sandbox is single-tenant and discarded.
+ARG POSTGRES_MAJOR=18
+ARG PGDG_KEY_SHA256=0144068502a1eddd2a0280ede10ef607d1ec592ce819940991203941564e8e76
+RUN install -d /usr/share/postgresql-common/pgdg \
+ && curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+      https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+ && echo "${PGDG_KEY_SHA256}  /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc" | sha256sum -c - \
+ && . /etc/os-release \
+ && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
+      > /etc/apt/sources.list.d/pgdg.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends \
+      postgresql-${POSTGRES_MAJOR} postgresql-client-${POSTGRES_MAJOR} redis-server \
+ && rm -rf /var/lib/apt/lists/* \
+ && pg_lsclusters --no-header | grep -q "^${POSTGRES_MAJOR} " \
+ && printf 'local all all trust\nhost all all 127.0.0.1/32 trust\nhost all all ::1/128 trust\n' \
+      > /etc/postgresql/${POSTGRES_MAJOR}/main/pg_hba.conf
+COPY deploy/docker/sandbox-services.sh /usr/local/bin/sandbox-services
+
 # OpenShell-required non-root user (see the header note). UID/GID in the high
 # range per OpenShell's bring-your-own-container guidance, so that without
 # user-namespace remapping the sandbox user maps to an unprivileged, unused
