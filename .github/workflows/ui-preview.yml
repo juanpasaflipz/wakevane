@@ -586,13 +586,30 @@ jobs:
       pull-requests: write
     timeout-minutes: 10
     steps:
+      # A fork without Databricks credentials never had a preview to delete.
+      - name: Check preview credentials
+        id: configured
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+        run: |
+          if [ -n "$DATABRICKS_HOST" ] && [ -n "$DATABRICKS_CLIENT_ID" ] && [ -n "$DATABRICKS_CLIENT_SECRET" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No Databricks credentials; nothing to clean up."
+          fi
+
       - name: Install Databricks CLI
+        if: steps.configured.outputs.ready == 'true'
         run: |
           curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/2260866f83a41a2df55e1cfe7ffe038b78325bf6/install.sh | sh
           databricks --version
 
       - name: Delete app
         id: delete
+        if: steps.configured.outputs.ready == 'true'
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
@@ -686,7 +703,7 @@ jobs:
           record_result deleted 'app deleted and absence verified'
 
       - name: Upload cleanup result
-        if: always()
+        if: always() && steps.configured.outputs.ready == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ui-preview-cleanup-result
