@@ -12,3 +12,7 @@ export function runsInCloudSandbox(harness: string | null | undefined): boolean 
     (CLOUD_INCLUDED_HARNESSES.has(harness) || CLOUD_OWN_KEY_HARNESSES.has(harness))
   );
 }
+
+/** Why a key-backed harness is off until the member saves their own key. */
+export const OWN_KEY_REQUIRED_MESSAGE =
+  "Codex runs on your own OpenAI key. Add one in Settings → Sandbox Integrations.";

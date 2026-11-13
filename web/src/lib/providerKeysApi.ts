@@ -32,6 +32,9 @@ async function readStatus(res: Response, action: string): Promise<OpenAIKeyStatu
   return (await res.json()) as OpenAIKeyStatus;
 }
 
+/** Query key for the key status, shared so saving a key refreshes every reader. */
+export const OPENAI_KEY_STATUS_QUERY_KEY = ["provider-keys", "openai"] as const;
+
 /**
  * Fetch the current user's key status. Resolves to ``null`` when the server
  * does not offer provider keys (feature off or no credential store).
