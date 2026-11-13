@@ -435,6 +435,17 @@ docker build -t omnigent-host:latest --target host \
              -f deploy/docker/Dockerfile .
 ```
 
+### Test databases
+
+The host image also carries PostgreSQL 18 and Redis for running a
+repository's database tests. Nothing starts on boot. Run
+`sandbox-services start` to start both on localhost (it prints the
+connection URLs), `status` to check them and `stop` to stop them. Local
+connections need no password, so use them only in a disposable,
+single-tenant sandbox. The command must run as root, since PostgreSQL
+runs as its own `postgres` user. Pick another PostgreSQL major with
+`--build-arg POSTGRES_MAJOR=<n>`.
+
 ### Baking in extra harness CLIs
 
 A harness whose CLI isn't in the image fails closed with

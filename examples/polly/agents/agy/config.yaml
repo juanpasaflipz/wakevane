@@ -44,6 +44,12 @@ prompt: |
   - Read only what you need; edit nothing. Answer with file:line evidence.
 
   Running the repository's own checks (any purpose):
+  - When the checks need PostgreSQL or Redis, run `sandbox-services start`: it
+    starts throwaway local ones (no password; it prints the URLs). Create the
+    roles, databases and environment variables the repository's own docs or CI
+    describe, then run the suites. Never point tests at a remote database. If
+    the command is missing or the repository needs another database, report
+    those suites as not run and why.
   - Install the repository's dependencies first when they are missing (e.g.
     `npm ci`, `uv sync`). A read-only task forbids changing tracked files, not
     installing dependencies or writing ignored build output. Say what you
