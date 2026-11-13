@@ -333,7 +333,12 @@ import {
 import { BrandLogo } from "@/components/BrandLogo";
 import { PoweredByOmnigent } from "@/components/PoweredByOmnigent";
 import { PromptExamples } from "@/components/PromptExamples";
-import { runsInCloudSandbox } from "@/lib/cloudHarnesses";
+import {
+  CLOUD_OWN_KEY_HARNESSES,
+  OWN_KEY_REQUIRED_MESSAGE,
+  runsInCloudSandbox,
+} from "@/lib/cloudHarnesses";
+import { OPENAI_KEY_STATUS_QUERY_KEY, fetchOpenAIKeyStatus } from "@/lib/providerKeysApi";
 import { SkillPills } from "@/components/SkillPills";
 import { ComposerMicButton } from "@/components/ComposerMicButton";
 import type { CostControlMode } from "@/components/CostRoutingControl";
@@ -1707,7 +1712,7 @@ export function AgentHarnessPicker({
       blockedReason !== undefined || (!readiness.selectable && readiness.fallbackRelevant);
     const warning =
       blockedReason !== undefined
-        ? "No models available"
+        ? "Unavailable"
         : harnessWarningBadgeText(readiness.reason, collapsedBadge);
     const warningMessage =
       blockedReason ??
@@ -2534,12 +2539,24 @@ export function NewChatLandingScreen() {
   );
   // A hosted, sandbox-only deployment lists only the harnesses a sandbox can run.
   const cloudOnlyHarnesses = sandboxSelected && isFeatureEnabled(info, "web_only");
+  // Codex runs on the member's own OpenAI key in the cloud. `null` means the
+  // server offers no member keys at all.
+  const openAIKeyStatus = useQuery({
+    queryKey: OPENAI_KEY_STATUS_QUERY_KEY,
+    queryFn: fetchOpenAIKeyStatus,
+    enabled: cloudOnlyHarnesses,
+  });
+  const memberKeysOffered = openAIKeyStatus.data !== null;
   const pickerHarnessEntries = useMemo(
     () =>
       cloudOnlyHarnesses
-        ? harnessEntries.filter((agent) => runsInCloudSandbox(agent.harness))
+        ? harnessEntries.filter(
+            (agent) =>
+              runsInCloudSandbox(agent.harness) &&
+              (memberKeysOffered || !CLOUD_OWN_KEY_HARNESSES.has(agent.harness ?? "")),
+          )
         : harnessEntries,
-    [cloudOnlyHarnesses, harnessEntries],
+    [cloudOnlyHarnesses, harnessEntries, memberKeysOffered],
   );
   // Provider the sandbox pick launches on. Seeded to the sticky last pick (or
   // the first offered row) once the picker rows load; null both before that
@@ -3376,16 +3393,21 @@ export function NewChatLandingScreen() {
       cacheUser,
       sandboxPreviewsOffered,
     );
+  const needsOwnKey =
+    cloudOnlyHarnesses && openAIKeyStatus.data != null && !openAIKeyStatus.data.connected;
   const sandboxBlockedReasons = useMemo(
     () =>
       new Map(
         harnessEntries.flatMap((agent) => {
+          if (needsOwnKey && CLOUD_OWN_KEY_HARNESSES.has(agent.harness ?? "")) {
+            return [[agent.id, OWN_KEY_REQUIRED_MESSAGE] as const];
+          }
           if (!sandboxUnsupportedAgents.has(agent.id)) return [];
           const reason = sandboxUnsupportedAgents.get(agent.id);
           return [[agent.id, reason ?? noReachableModelsMessage(agent.display_name)] as const];
         }),
       ),
-    [sandboxUnsupportedAgents, harnessEntries],
+    [sandboxUnsupportedAgents, harnessEntries, needsOwnKey],
   );
   // A harness the default catalog cannot serve keeps its ordinary picker.
   const sandboxDefaultModelsEnabled =

@@ -11333,6 +11333,55 @@ describe("NewChatLandingScreen bundle-agent Smart Routing", () => {
     expect(screen.queryByTestId("new-chat-landing-agent-a3")).toBeNull();
   });
 
+  it.each([
+    {
+      name: "blocks Codex with a reason until the member saves an OpenAI key",
+      keyResponse: () =>
+        new Response(
+          JSON.stringify({ connected: false, key_hint: null, models: [], updated_at: null }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      codexOffered: true,
+    },
+    {
+      name: "hides Codex when the server offers no member keys",
+      keyResponse: () => new Response(null, { status: 404 }),
+      codexOffered: false,
+    },
+  ])("$name", async ({ keyResponse, codexOffered }) => {
+    authenticatedFetchMock.mockImplementation(async (url: RequestInfo | URL) =>
+      String(url).includes("/v1/provider-keys/openai")
+        ? keyResponse()
+        : new Response(null, { status: 404 }),
+    );
+    mockAgents([
+      testAgent("ag_polly", "polly", { display_name: "Polly", harness: "pi", builtin: true }),
+      ...DEFAULT_LANDING_AGENTS,
+    ]);
+    localStorage.setItem(LAST_AGENT_KEY, "ag_polly");
+    renderLanding({
+      managed_sandboxes_enabled: true,
+      features: { web_only: true },
+    } as Partial<ServerInfo>);
+
+    const chip = screen.getByTestId("new-chat-landing-agent-select");
+    await waitFor(() =>
+      expect(authenticatedFetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/v1/provider-keys/openai"),
+      ),
+    );
+    fireEvent.pointerDown(chip, { button: 0 });
+    // Claude Code runs on the trial credit either way.
+    expect(screen.getByTestId("new-chat-landing-agent-a1")).toBeInTheDocument();
+    if (codexOffered) {
+      await waitFor(() =>
+        expect(screen.getByTestId("new-chat-landing-agent-warning-a2")).toBeInTheDocument(),
+      );
+    } else {
+      await waitFor(() => expect(screen.queryByTestId("new-chat-landing-agent-a2")).toBeNull());
+    }
+  });
+
   it("does not offer an agent that a subscription wakes for a hand-typed task", async () => {
     mockAgents([
       testAgent("ag_polly", "polly", { display_name: "Polly", harness: "pi", builtin: true }),

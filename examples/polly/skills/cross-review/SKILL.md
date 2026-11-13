@@ -1,6 +1,6 @@
 ---
 name: cross-review
-description: Verify an implementer's diff with an INDEPENDENT, different-vendor sub-agent (diff plus contract only); turn blocking issues into fix-tasks and loop until clean.
+description: Verify an implementer's diff with an INDEPENDENT sub-agent, a different vendor or else a different model (diff plus contract only); turn blocking issues into fix-tasks and loop until clean.
 ---
 
 # cross-review — independent verification
@@ -26,7 +26,8 @@ anyone needs to read through.
    exact file set/command/commit the implementer reported. Never use
    `grep -c 'def test_'` as a pytest count: it counts functions, not collected
    cases, and misses parametrized case expansion.
-3. Dispatch a DIFFERENT-vendor sub-agent as reviewer: pick any AVAILABLE worker
+3. Dispatch a DIFFERENT-vendor sub-agent as reviewer (or, when only one vendor
+   is available, a different model on it; see Notes): pick any AVAILABLE worker
    whose vendor differs from the implementer's — `claude_code`, `codex`,
    `opencode`, `cursor`, `hermes`, `agy`, or `pi` (e.g. Claude built it → any of
    `codex` / `opencode` / `cursor` / `hermes` / `agy` / `pi`, and so on). Use a
@@ -61,12 +62,13 @@ anyone needs to read through.
    the user with specifics.
 
 ## Notes
-- Cross-review requires a reviewer from a DIFFERENT vendor than the implementer,
-  so it needs at least two AVAILABLE workers (per polly's roster preflight). If
-  only one worker — or only one vendor that can review this implementer's PR —
-  is available on the machine, you CANNOT run independent cross-vendor review:
-  don't dispatch a reviewer that can't boot, say so explicitly, and pull in the
-  human at the plan gate.
+- Cross-review prefers a reviewer from a DIFFERENT vendor than the
+  implementer. If only one vendor is available, use a different model of that
+  vendor instead: same worker, an `args.model` from `sys_list_models` that
+  differs from the implementer's (prefer a stronger one), same isolation rules.
+  Say in the report that the second opinion came from a different model. If no
+  other model is listed either, don't dispatch a reviewer that can't boot; say
+  so and pull in the human at the plan gate.
 - Give the reviewer ONLY the diff snapshot + contract — never the implementer's
   transcript or worktree. The cross-vendor independence is the whole point.
 - Review is a coding sub-agent (`claude_code`/`codex`/`opencode`/`cursor`/`hermes`/`agy`/`pi`) dispatched with
